@@ -4,47 +4,47 @@
 
 A comprehensive command-line system optimization suite designed specifically for Intel-based MacBooks. This is the CLI version of the OptiMac application, offering powerful system tuning, maintenance, and monitoring capabilities through an interactive terminal interface.
 
-## ⚠️ Important Notice
+## Important Notice
 
 **This tool is designed exclusively for Intel-based Macs.** If you have an Apple Silicon Mac (M1/M2/M3), please use the appropriate version.
 
 ## Features
 
-### 🚀 System Optimizations
+### System Optimizations
 - **Performance Tuning**: Optimize kernel parameters for improved system responsiveness
 - **Memory Management**: Advanced memory optimization and purging
 - **SSD Optimization**: TRIM support and hibernation management
 - **Security Hardening**: Firewall configuration and system security enhancements
 
-### 🌐 Network Optimizations
+### Network Optimizations
 - **TCP/IP Stack Tuning**: Optimize network parameters for better throughput
 - **DNS Management**: Fast DNS cache flushing
 - **Firewall Control**: Easy firewall enable/disable functionality
 
-### 💾 Storage Optimizations
+### Storage Optimizations
 - **Cache Clearing**: System and user cache cleanup
 - **Language Files**: Remove unused language resources
 - **Font Cache**: Rebuild and optimize font caches
 - **Metadata Cleanup**: Remove .DS_Store files recursively
 
-### ⚡ Performance Tweaks
+### Performance Tweaks
 - **Spotlight Control**: Disable/enable system indexing
 - **Animation Removal**: Eliminate UI animations for faster response
 - **Dashboard Management**: Disable legacy Dashboard
 - **Dock Optimization**: Remove Dock animations
 
-### 🔧 Maintenance Tools
+### Maintenance Tools
 - **Disk Permissions**: Verify and repair disk permissions
 - **Maintenance Scripts**: Run daily/weekly/monthly maintenance
 - **System Logs**: Clear old log files
 - **SMC Reset**: Guided SMC reset instructions
 
-### 🔋 Power Management
+### Power Management
 - **Power Settings**: Optimize sleep and wake behaviors
 - **Low Power Mode**: Toggle power saving features
 - **AutoBoot Control**: Manage automatic boot on lid open (Intel only)
 
-### 📊 System Monitoring
+### System Monitoring
 - **CPU Information**: Detailed processor stats
 - **Memory Status**: Real-time RAM usage
 - **GPU Details**: Graphics card information
@@ -53,7 +53,7 @@ A comprehensive command-line system optimization suite designed specifically for
 - **Network Status**: Active network interfaces
 - **Temperature Sensors**: Hardware temperature monitoring (requires iStats)
 
-### 🎯 Advanced Features
+### Advanced Features
 - **Multi-Select Interface**: Choose multiple optimizations per section (e.g., `A,C` to run options A and C)
 - **State Tracking**: Persistent logging of all optimizations with timestamps
 - **MDM Detection**: Check for Mobile Device Management enrollment
@@ -257,13 +257,13 @@ Contributions welcome! Please:
 
 ## Warnings
 
-⚠️ **Use at your own risk**. While all optimizations are tested, system changes can have unintended effects.
+**Use at your own risk**. While all optimizations are tested, system changes can have unintended effects.
 
-⚠️ **Backup your data** before running aggressive optimizations.
+**Backup your data** before running aggressive optimizations.
 
-⚠️ **Some optimizations require a restart** to take full effect.
+**Some optimizations require a restart** to take full effect.
 
-⚠️ **MDM-enrolled devices** may have restrictions that prevent certain optimizations.
+**MDM-enrolled devices** may have restrictions that prevent certain optimizations.
 
 ## Related Projects
 
@@ -287,4 +287,4 @@ For issues, questions, or suggestions:
 
 ---
 
-**Made with ❤️ for Intel Mac users who want maximum performance from their machines.**
+**Made for Intel Mac users who want maximum performance from their machines.**
