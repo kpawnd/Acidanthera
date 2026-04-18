@@ -279,7 +279,7 @@ reinstall_cask_app() {
     local display_name="$3"
     local supported_ver
     local attempt=1
-    local max_attempts=2
+    local max_attempts=3
 
     if ! brew_is_healthy; then
         print_warn "Homebrew unavailable; cannot install $display_name."
@@ -308,6 +308,7 @@ reinstall_cask_app() {
 
         if [[ "$attempt" -lt "$max_attempts" ]]; then
             print_warn "Install attempt failed for $display_name. Repairing Homebrew and retrying once."
+            resolve_brew_download_locks || true
             repair_homebrew_environment || true
             brew_cmd update --force --quiet >/dev/null 2>&1 || true
         fi
@@ -327,6 +328,44 @@ reinstall_cask_app() {
     fi
 
     record_cask_lock "$token" "$app_path" || true
+    return 0
+}
+
+resolve_brew_download_locks() {
+    local lock_dir="${HOME}/Library/Caches/Homebrew/downloads"
+    local lock_wait_seconds=90
+    local elapsed=0
+    local found_lock=0
+    local lockfile
+
+    if [[ ! -d "$lock_dir" ]]; then
+        return 0
+    fi
+
+    while IFS= read -r lockfile; do
+        found_lock=1
+        print_warn "Detected Homebrew download lock: $(basename "$lockfile")"
+    done < <(find "$lock_dir" -maxdepth 1 -type f -name '*.incomplete' 2>/dev/null)
+
+    if [[ "$found_lock" -eq 0 ]]; then
+        return 0
+    fi
+
+    print_info "Waiting up to ${lock_wait_seconds}s for existing Homebrew download process to finish..."
+    while [[ "$elapsed" -lt "$lock_wait_seconds" ]]; do
+        if ! find "$lock_dir" -maxdepth 1 -type f -name '*.incomplete' | grep -q .; then
+            print_info "Homebrew lock cleared by active process."
+            return 0
+        fi
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+
+    print_warn "Homebrew lock did not clear in time. Cleaning stale lock files."
+    while IFS= read -r lockfile; do
+        rm -f "$lockfile" >/dev/null 2>&1 || true
+    done < <(find "$lock_dir" -maxdepth 1 -type f -name '*.incomplete' 2>/dev/null)
+
     return 0
 }
 
@@ -392,6 +431,15 @@ render_app_install_progress() {
     bar="$(printf '%*s' "$filled" '' | tr ' ' '#')$(printf '%*s' "$empty" '' | tr ' ' '-')"
 
     printf "\r\033[2K${BLUE}[INSTALL]${NC} [%s] %3d%% - %s" "$bar" "$pct" "$label"
+}
+
+announce_install_stage() {
+    local current="$1"
+    local total="$2"
+    local label="$3"
+
+    render_app_install_progress "$current" "$total" "$label"
+    printf "\n"
 }
 
 download_file_optimized() {
@@ -496,7 +544,7 @@ install_packet_tracer() {
 resolve_packet_tracer_dmg_url() {
     local explicit_url="${PACKET_TRACER_DMG_URL:-}"
     local release_repo="${PACKET_TRACER_RELEASE_REPO:-kpawnd/acidanthera}"
-    local release_tag="${PACKET_TRACER_RELEASE_TAG:-cisco}"
+    local release_tag="${PACKET_TRACER_RELEASE_TAG:-Cisco}"
     local api_url
     local json
 
@@ -553,22 +601,22 @@ install_required_software() {
     repair_homebrew_environment || true
 
     current_task=$((current_task + 1))
-    render_app_install_progress "$current_task" "$total_tasks" "Installing Blender"
+    announce_install_stage "$current_task" "$total_tasks" "Installing Blender"
     reinstall_cask_app "blender" "/Applications/Blender.app" "Blender" || had_error=1
 
     current_task=$((current_task + 1))
-    render_app_install_progress "$current_task" "$total_tasks" "Installing Android Studio"
+    announce_install_stage "$current_task" "$total_tasks" "Installing Android Studio"
     reinstall_cask_app "android-studio" "/Applications/Android Studio.app" "Android Studio" || had_error=1
 
     current_task=$((current_task + 1))
-    render_app_install_progress "$current_task" "$total_tasks" "Installing Azure Data Studio"
+    announce_install_stage "$current_task" "$total_tasks" "Installing Azure Data Studio"
     reinstall_cask_app "azure-data-studio" "/Applications/Azure Data Studio.app" "Azure Data Studio" || had_error=1
 
     current_task=$((current_task + 1))
-    render_app_install_progress "$current_task" "$total_tasks" "Installing Cisco Packet Tracer"
+    announce_install_stage "$current_task" "$total_tasks" "Installing Cisco Packet Tracer"
     install_packet_tracer || had_error=1
 
-    printf "\r\033[2K"
+    clear_inline_status
     verify_required_software_present || had_error=1
 
     if [[ "$had_error" -eq 1 ]]; then
@@ -605,7 +653,7 @@ print_summary() {
     echo "9. Sysmon hotkey setup disabled."
     echo "10. Performance tweaks applied (Spotlight/animations/Dock)."
     echo "11. Reinstall target apps and record cask lock metadata."
-    echo "12. Cisco Packet Tracer install from GitHub release tag cisco (or PACKET_TRACER_DMG_URL override)."
+    echo "12. Cisco Packet Tracer install from GitHub release tag Cisco (or PACKET_TRACER_DMG_URL override)."
     echo ""
     echo "Use now:"
     echo "- sysmon           (live terminal monitor)"
