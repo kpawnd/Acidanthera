@@ -1,0 +1,254 @@
+#!/bin/bash
+
+require_macos() {
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        print_err "This script is for macOS only."
+        return 1
+    fi
+
+    return 0
+}
+
+ensure_admin_user() {
+    if ! id -Gn "$USER" | tr ' ' '\n' | grep -qx "admin"; then
+        print_warn "Current user is not in the admin group."
+        print_warn "Power settings and service setup may fail without admin privileges."
+        return 0
+    fi
+
+    print_ok "Admin group membership detected for user: $USER"
+    return 0
+}
+
+ensure_sudo_session() {
+    print_info "Requesting sudo access (needed for system changes)."
+    sudo -v
+    start_sudo_keepalive
+}
+
+start_sudo_keepalive() {
+    if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]] && kill -0 "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    (
+        while true; do
+            sudo -n true >/dev/null 2>&1 || exit 0
+            sleep 60
+        done
+    ) &
+    SUDO_KEEPALIVE_PID=$!
+    export SUDO_KEEPALIVE_PID
+}
+
+stop_sudo_keepalive() {
+    if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]] && kill -0 "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1; then
+        kill "$SUDO_KEEPALIVE_PID" >/dev/null 2>&1 || true
+        wait "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    fi
+}
+
+ensure_git_installed() {
+    local clt_label
+
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+    if command -v git >/dev/null 2>&1; then
+        print_ok "git is already available: $(command -v git)"
+        return 0
+    fi
+
+    if [[ -x /usr/bin/git ]]; then
+        print_warn "git exists at /usr/bin/git but was missing from PATH. PATH corrected."
+        return 0
+    fi
+
+    print_warn "git is not installed. Attempting to install Command Line Tools."
+
+    clt_label="$(softwareupdate -l 2>/dev/null | awk -F'* ' '/Command Line Tools/ {print $2}' | sed 's/^Label: //' | tail -n 1)"
+    if [[ -n "$clt_label" ]]; then
+        print_info "Installing: $clt_label"
+        if sudo softwareupdate -i "$clt_label" --verbose; then
+            if command -v git >/dev/null 2>&1 || [[ -x /usr/bin/git ]]; then
+                print_ok "git installed successfully via Command Line Tools."
+                return 0
+            fi
+        fi
+    fi
+
+    print_warn "Automatic CLT install did not complete. Triggering interactive installer."
+    xcode-select --install >/dev/null 2>&1 || true
+
+    if command -v git >/dev/null 2>&1 || [[ -x /usr/bin/git ]]; then
+        print_ok "git is now available."
+        return 0
+    fi
+
+    print_err "git is still unavailable. Complete Command Line Tools installation, then rerun this script."
+    return 1
+}
+
+brew_is_healthy() {
+    if ! command -v brew >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if brew --version >/dev/null 2>&1; then
+        return 0
+    fi
+
+    return 1
+}
+
+repair_homebrew_shallow_clones() {
+    local brew_repo
+    local core_tap
+    local cask_tap
+    local had_error=0
+
+    if ! command -v brew >/dev/null 2>&1; then
+        print_warn "brew is unavailable; cannot repair shallow clones."
+        return 1
+    fi
+
+    brew_repo="$(brew --repository 2>/dev/null || true)"
+    if [[ -z "$brew_repo" ]]; then
+        if [[ -d /opt/homebrew ]]; then
+            brew_repo="/opt/homebrew"
+        elif [[ -d /usr/local/Homebrew ]]; then
+            brew_repo="/usr/local/Homebrew"
+        fi
+    fi
+
+    if [[ -z "$brew_repo" || ! -d "$brew_repo" ]]; then
+        print_warn "Could not resolve Homebrew repository path for shallow clone repair."
+        return 1
+    fi
+
+    core_tap="$brew_repo/Library/Taps/homebrew/homebrew-core"
+    cask_tap="$brew_repo/Library/Taps/homebrew/homebrew-cask"
+
+    if [[ -d "$core_tap/.git" ]]; then
+        print_info "Repairing shallow clone: homebrew-core"
+        if ! git -C "$core_tap" fetch --unshallow >/dev/null 2>&1; then
+            print_warn "Could not unshallow homebrew-core."
+            had_error=1
+        fi
+    fi
+
+    if [[ -d "$cask_tap/.git" ]]; then
+        print_info "Repairing shallow clone: homebrew-cask"
+        if ! git -C "$cask_tap" fetch --unshallow >/dev/null 2>&1; then
+            print_warn "Could not unshallow homebrew-cask."
+            had_error=1
+        fi
+    fi
+
+    if [[ "$had_error" -eq 1 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+repair_homebrew_permissions() {
+    local had_error=0
+    local zsh_dirs=(
+        "/usr/local/share/zsh"
+        "/usr/local/share/zsh/site-functions"
+    )
+    local d
+
+    for d in "${zsh_dirs[@]}"; do
+        if [[ ! -d "$d" ]]; then
+            sudo mkdir -p "$d" >/dev/null 2>&1 || {
+                print_warn "Could not create directory: $d"
+                had_error=1
+                continue
+            }
+        fi
+
+        if [[ ! -w "$d" ]]; then
+            print_info "Fixing write permissions for: $d"
+            sudo chown -R "$USER":admin "$d" >/dev/null 2>&1 || {
+                print_warn "Could not change ownership for: $d"
+                had_error=1
+            }
+            sudo chmod u+w "$d" >/dev/null 2>&1 || {
+                print_warn "Could not set write permission for: $d"
+                had_error=1
+            }
+        fi
+    done
+
+    if [[ "$had_error" -eq 1 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+repair_homebrew_environment() {
+    local had_error=0
+
+    if command -v brew >/dev/null 2>&1; then
+        print_info "Repairing Homebrew tap clone depth and permissions."
+        repair_homebrew_shallow_clones || had_error=1
+    fi
+
+    repair_homebrew_permissions || had_error=1
+
+    if [[ "$had_error" -eq 1 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+install_homebrew() {
+    if ! ensure_git_installed; then
+        print_err "Cannot install Homebrew without git in PATH."
+        return 1
+    fi
+
+    if brew_is_healthy; then
+        print_ok "Homebrew is already installed."
+        return 0
+    fi
+
+    if command -v brew >/dev/null 2>&1; then
+        print_warn "Homebrew is installed but appears broken. Attempting reinstall."
+    fi
+
+    print_info "Installing Homebrew..."
+    repair_homebrew_environment || true
+    if ! NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        if command -v brew >/dev/null 2>&1; then
+            print_warn "Homebrew install/update failed. Attempting shallow clone repair and retry."
+            repair_homebrew_environment || true
+            brew update --force --quiet >/dev/null 2>&1 || true
+        fi
+
+        if brew_is_healthy; then
+            print_ok "Homebrew is healthy after repair/retry."
+            return 0
+        fi
+
+        print_err "Homebrew installation failed."
+        return 1
+    fi
+
+    if [[ -x /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -x /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+
+    if ! brew_is_healthy; then
+        print_err "Homebrew is still unavailable or unhealthy after reinstall attempt."
+        return 1
+    fi
+
+    print_ok "Homebrew installed successfully."
+    return 0
+}
