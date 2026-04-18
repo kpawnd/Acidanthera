@@ -124,6 +124,57 @@ brew_is_healthy() {
     return 1
 }
 
+repair_homebrew_shallow_clones() {
+    local brew_repo
+    local core_tap
+    local cask_tap
+    local had_error=0
+
+    if ! command -v brew >/dev/null 2>&1; then
+        print_warn "brew is unavailable; cannot repair shallow clones."
+        return 1
+    fi
+
+    brew_repo="$(brew --repository 2>/dev/null || true)"
+    if [[ -z "$brew_repo" ]]; then
+        if [[ -d /opt/homebrew ]]; then
+            brew_repo="/opt/homebrew"
+        elif [[ -d /usr/local/Homebrew ]]; then
+            brew_repo="/usr/local/Homebrew"
+        fi
+    fi
+
+    if [[ -z "$brew_repo" || ! -d "$brew_repo" ]]; then
+        print_warn "Could not resolve Homebrew repository path for shallow clone repair."
+        return 1
+    fi
+
+    core_tap="$brew_repo/Library/Taps/homebrew/homebrew-core"
+    cask_tap="$brew_repo/Library/Taps/homebrew/homebrew-cask"
+
+    if [[ -d "$core_tap/.git" ]]; then
+        print_info "Repairing shallow clone: homebrew-core"
+        if ! git -C "$core_tap" fetch --unshallow >/dev/null 2>&1; then
+            print_warn "Could not unshallow homebrew-core."
+            had_error=1
+        fi
+    fi
+
+    if [[ -d "$cask_tap/.git" ]]; then
+        print_info "Repairing shallow clone: homebrew-cask"
+        if ! git -C "$cask_tap" fetch --unshallow >/dev/null 2>&1; then
+            print_warn "Could not unshallow homebrew-cask."
+            had_error=1
+        fi
+    fi
+
+    if [[ "$had_error" -eq 1 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
 configure_firmware_password() {
     local answer
 
@@ -176,6 +227,17 @@ install_homebrew() {
 
     print_info "Installing Homebrew..."
     if ! NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        if command -v brew >/dev/null 2>&1; then
+            print_warn "Homebrew install/update failed. Attempting shallow clone repair and retry."
+            repair_homebrew_shallow_clones || true
+            brew update --force --quiet >/dev/null 2>&1 || true
+        fi
+
+        if brew_is_healthy; then
+            print_ok "Homebrew is healthy after repair/retry."
+            return 0
+        fi
+
         print_err "Homebrew installation failed."
         return 1
     fi
@@ -245,24 +307,49 @@ remove_deepfreeze_and_faronics() {
 
     print_info "Recursively removing Deep Freeze / Faronics files and folders..."
 
+    local matches_found=0
+    local entry
+
     for root in "${search_roots[@]}"; do
         if [[ ! -d "$root" ]]; then
             continue
         fi
 
-        print_info "Scanning: $root"
+        print_info "Scanning root: $root"
+
+        for entry in "$root"/* "$root"/.*; do
+            [[ ! -e "$entry" ]] && continue
+            [[ "$entry" == "$root/." || "$entry" == "$root/.." ]] && continue
+
+            print_info "Scanning path: $entry"
+
+            while IFS= read -r path; do
+                [[ -z "$path" ]] && continue
+                matches_found=$((matches_found + 1))
+                print_info "Deleting: $path"
+                if ! sudo rm -rf "$path"; then
+                    print_warn "Could not delete: $path"
+                    had_error=1
+                fi
+            done < <(
+                find "$entry" -xdev \( -iname '*faronics*' -o -iname '*deep*freeze*' -o -iname '*deepfreeze*' \) 2>/dev/null
+            )
+        done
 
         while IFS= read -r path; do
             [[ -z "$path" ]] && continue
+            matches_found=$((matches_found + 1))
             print_info "Deleting: $path"
             if ! sudo rm -rf "$path"; then
                 print_warn "Could not delete: $path"
                 had_error=1
             fi
         done < <(
-            find "$root" -xdev \( -iname '*faronics*' -o -iname '*deep*freeze*' -o -iname '*deepfreeze*' \) 2>/dev/null
+            find "$root" -maxdepth 1 -xdev \( -iname '*faronics*' -o -iname '*deep*freeze*' -o -iname '*deepfreeze*' \) 2>/dev/null
         )
     done
+
+    print_info "Recursive scan complete. Matches found: $matches_found"
 
     rm -f "$tmp_list" || true
 
