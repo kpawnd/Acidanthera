@@ -20,6 +20,322 @@ ensure_brew_in_path() {
     export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 }
 
+network_stage_update() {
+    local label="$1"
+    local speed="${2:---}"
+    local eta="${3:---}"
+    local extra="${4:-}"
+
+    if [[ -n "${ACID_STAGE_FILE:-}" ]]; then
+        if [[ -n "$extra" ]]; then
+            echo "NET | ${label} | speed=${speed} | eta=${eta} | ${extra}" > "$ACID_STAGE_FILE" 2>/dev/null || true
+        else
+            echo "NET | ${label} | speed=${speed} | eta=${eta}" > "$ACID_STAGE_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+get_remote_file_size_http() {
+    local url="$1"
+    local content_length=""
+
+    content_length="$(curl -fsI -L "$url" 2>/dev/null | awk -F': ' 'tolower($1)=="content-length" {print $2}' | tr -d '\r' | tail -n 1)"
+    if [[ -n "$content_length" && "$content_length" =~ ^[0-9]+$ ]]; then
+        echo "$content_length"
+        return 0
+    fi
+
+    echo "0"
+    return 1
+}
+
+monitor_net_download_progress() {
+    local file_path="$1"
+    local label="$2"
+    local total_size="$3"
+    local last_size=0
+    local current_size=0
+    local last_time=0
+    local current_time=0
+    local elapsed=0
+    local speed_bps=0
+    local speed_display="--"
+    local eta_display="--"
+    local progress_display="--"
+    local downloaded_mb=0
+    local no_growth_count=0
+
+    last_time=$(date +%s)
+
+    while true; do
+        if [[ ! -f "$file_path" ]]; then
+            sleep 0.5
+            continue
+        fi
+
+        current_size=$(stat -f%z "$file_path" 2>/dev/null || echo 0)
+        current_time=$(date +%s)
+        elapsed=$((current_time - last_time))
+
+        if [[ $elapsed -ge 2 ]]; then
+            if [[ $current_size -eq $last_size ]]; then
+                no_growth_count=$((no_growth_count + 1))
+                if [[ $no_growth_count -ge 3 ]]; then
+                    break
+                fi
+            else
+                no_growth_count=0
+                speed_bps=$(( (current_size - last_size) / elapsed ))
+                downloaded_mb=$(( current_size / 1048576 ))
+
+                if [[ $speed_bps -ge 1048576 ]]; then
+                    speed_display="$((speed_bps / 1048576))MB/s"
+                elif [[ $speed_bps -gt 0 ]]; then
+                    speed_display="$((speed_bps / 1024))KB/s"
+                else
+                    speed_display="--"
+                fi
+
+                eta_display="--"
+                progress_display="--"
+                if [[ -n "$total_size" && "$total_size" =~ ^[0-9]+$ && $total_size -gt 0 ]]; then
+                    local progress=$(( (current_size * 100) / total_size ))
+                    progress_display="${progress}%"
+                    if [[ $speed_bps -gt 0 ]]; then
+                        local remaining_bytes=$(( total_size - current_size ))
+                        if [[ $remaining_bytes -gt 0 ]]; then
+                            local eta_seconds=$(( remaining_bytes / speed_bps ))
+                            if [[ $eta_seconds -gt 3600 ]]; then
+                                eta_display="$((eta_seconds / 3600))h $(((eta_seconds % 3600) / 60))m"
+                            elif [[ $eta_seconds -gt 60 ]]; then
+                                eta_display="$((eta_seconds / 60))m $((eta_seconds % 60))s"
+                            else
+                                eta_display="${eta_seconds}s"
+                            fi
+                        else
+                            eta_display="0s"
+                        fi
+                    fi
+                fi
+
+                network_stage_update "$label" "$speed_display" "$eta_display" "progress=${progress_display} | downloaded=${downloaded_mb}MB"
+            fi
+
+            last_size=$current_size
+            last_time=$current_time
+        fi
+
+        sleep 1
+    done
+}
+
+resolve_go_pkg_url() {
+    local arch="$1"
+    local json=""
+    local filename=""
+
+    json="$(curl -fsSL 'https://go.dev/dl/?mode=json' 2>/dev/null || true)"
+    if [[ -z "$json" ]]; then
+        return 1
+    fi
+
+    filename="$(printf '%s' "$json" | tr ',' '\n' | grep '"filename":"go' | grep "darwin-${arch}.pkg" | head -n 1 | cut -d '"' -f4)"
+    if [[ -z "$filename" ]]; then
+        return 1
+    fi
+
+    echo "https://go.dev/dl/${filename}"
+    return 0
+}
+
+install_go_official_pkg() {
+    local arch
+    local pkg_url
+    local pkg_file="/tmp/acidanthera-go.pkg"
+    local file_size="0"
+    local monitor_pid=""
+
+    arch="$(uname -m)"
+    case "$arch" in
+        arm64) arch="arm64" ;;
+        x86_64) arch="amd64" ;;
+        *)
+            print_warn "Unsupported architecture for Go pkg install: $arch"
+            return 1
+            ;;
+    esac
+
+    pkg_url="$(resolve_go_pkg_url "$arch" 2>/dev/null || true)"
+    if [[ -z "$pkg_url" ]]; then
+        return 1
+    fi
+
+    rm -f "$pkg_file" >/dev/null 2>&1 || true
+    network_stage_update "Golang" "--" "estimating" "phase=download"
+    file_size="$(get_remote_file_size_http "$pkg_url" || echo 0)"
+    monitor_net_download_progress "$pkg_file" "Golang" "$file_size" &
+    monitor_pid=$!
+
+    if ! curl --fail --location --retry 6 --retry-all-errors --retry-delay 2 --connect-timeout 15 --silent --show-error "$pkg_url" --output "$pkg_file"; then
+        kill "$monitor_pid" >/dev/null 2>&1 || true
+        wait "$monitor_pid" >/dev/null 2>&1 || true
+        rm -f "$pkg_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    kill "$monitor_pid" >/dev/null 2>&1 || true
+    wait "$monitor_pid" >/dev/null 2>&1 || true
+
+    network_stage_update "Golang" "--" "estimating" "phase=install-pkg"
+    if ! sudo installer -pkg "$pkg_file" -target / >/dev/null 2>&1; then
+        rm -f "$pkg_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    rm -f "$pkg_file" >/dev/null 2>&1 || true
+    return 0
+}
+
+resolve_target_user() {
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        printf '%s' "$SUDO_USER"
+    else
+        printf '%s' "$USER"
+    fi
+}
+
+resolve_target_home() {
+    local target_user
+    local target_home
+
+    target_user="$(resolve_target_user)"
+    target_home="$(eval echo "~${target_user}" 2>/dev/null || true)"
+    if [[ -z "$target_home" || ! -d "$target_home" ]]; then
+        target_home="$HOME"
+    fi
+
+    printf '%s' "$target_home"
+}
+
+resolve_go_tgz_url() {
+    local arch="$1"
+    local json=""
+    local filename=""
+
+    json="$(curl -fsSL 'https://go.dev/dl/?mode=json' 2>/dev/null || true)"
+    if [[ -z "$json" ]]; then
+        return 1
+    fi
+
+    filename="$(printf '%s' "$json" | tr ',' '\n' | grep '"filename":"go' | grep "darwin-${arch}.tar.gz" | head -n 1 | cut -d '"' -f4)"
+    if [[ -z "$filename" ]]; then
+        return 1
+    fi
+
+    echo "https://go.dev/dl/${filename}"
+    return 0
+}
+
+persist_go_userland_env() {
+    local target_user="$1"
+    local target_home="$2"
+    local profile_file="${target_home}/.zprofile"
+    local marker="# acidanthera-go-env"
+
+    if [[ -f "$profile_file" ]] && grep -q "$marker" "$profile_file" 2>/dev/null; then
+        return 0
+    fi
+
+    cat >> "$profile_file" <<EOF
+
+$marker
+export GOROOT="${target_home}/Developer/Apps/go"
+export GOPATH="${target_home}/go"
+export PATH="\$GOROOT/bin:\$GOPATH/bin:\$PATH"
+EOF
+
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        chown "$target_user":"$(id -gn "$target_user" 2>/dev/null || echo staff)" "$profile_file" >/dev/null 2>&1 || true
+    fi
+}
+
+install_go_userland_tgz() {
+    local arch
+    local tgz_url
+    local tgz_file="/tmp/acidanthera-go.tgz"
+    local file_size="0"
+    local monitor_pid=""
+    local target_user
+    local target_home
+    local dev_apps
+    local goroot
+    local gopath
+
+    arch="$(uname -m)"
+    case "$arch" in
+        arm64) arch="arm64" ;;
+        x86_64) arch="amd64" ;;
+        *)
+            print_warn "Unsupported architecture for Go tarball install: $arch"
+            return 1
+            ;;
+    esac
+
+    target_user="$(resolve_target_user)"
+    target_home="$(resolve_target_home)"
+    dev_apps="${target_home}/Developer/Apps"
+    goroot="${dev_apps}/go"
+    gopath="${target_home}/go"
+
+    tgz_url="$(resolve_go_tgz_url "$arch" 2>/dev/null || true)"
+    if [[ -z "$tgz_url" ]]; then
+        return 1
+    fi
+
+    rm -f "$tgz_file" >/dev/null 2>&1 || true
+    network_stage_update "Golang" "--" "estimating" "phase=download-userland"
+    file_size="$(get_remote_file_size_http "$tgz_url" || echo 0)"
+    monitor_net_download_progress "$tgz_file" "Golang" "$file_size" &
+    monitor_pid=$!
+
+    if ! curl --fail --location --retry 6 --retry-all-errors --retry-delay 2 --connect-timeout 15 --silent --show-error "$tgz_url" --output "$tgz_file"; then
+        kill "$monitor_pid" >/dev/null 2>&1 || true
+        wait "$monitor_pid" >/dev/null 2>&1 || true
+        rm -f "$tgz_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    kill "$monitor_pid" >/dev/null 2>&1 || true
+    wait "$monitor_pid" >/dev/null 2>&1 || true
+
+    network_stage_update "Golang" "--" "estimating" "phase=extract-userland"
+    mkdir -p "$dev_apps" "$gopath" >/dev/null 2>&1 || true
+    rm -rf "$goroot" >/dev/null 2>&1 || true
+
+    if ! tar -xzf "$tgz_file" -C "$dev_apps"; then
+        rm -f "$tgz_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    rm -f "$tgz_file" >/dev/null 2>&1 || true
+
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        chown -R "$target_user":"$(id -gn "$target_user" 2>/dev/null || echo staff)" "$dev_apps" "$gopath" >/dev/null 2>&1 || true
+    fi
+
+    persist_go_userland_env "$target_user" "$target_home"
+
+    export GOROOT="$goroot"
+    export GOPATH="$gopath"
+    export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"
+
+    if [[ -x "$GOROOT/bin/go" ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
 brew_cmd() {
     local brew_bin
     ensure_brew_in_path
@@ -51,10 +367,12 @@ ensure_git_installed() {
     fi
 
     print_warn "git is not installed. Attempting to install Command Line Tools."
+    network_stage_update "Command Line Tools" "--" "estimating" "phase=lookup"
 
     clt_label="$(softwareupdate -l 2>/dev/null | awk -F'* ' '/Command Line Tools/ {print $2}' | sed 's/^Label: //' | tail -n 1)"
     if [[ -n "$clt_label" ]]; then
         print_info "Installing: $clt_label"
+        network_stage_update "Command Line Tools" "--" "estimating" "phase=install"
         if sudo softwareupdate -i "$clt_label" --verbose; then
             if command -v git >/dev/null 2>&1 || [[ -x /usr/bin/git ]]; then
                 print_ok "git installed successfully via Command Line Tools."
@@ -64,6 +382,7 @@ ensure_git_installed() {
     fi
 
     print_warn "Automatic CLT install did not complete. Triggering interactive installer."
+    network_stage_update "Command Line Tools" "--" "manual" "phase=interactive"
     xcode-select --install >/dev/null 2>&1 || true
 
     if command -v git >/dev/null 2>&1 || [[ -x /usr/bin/git ]]; then
@@ -203,11 +522,13 @@ install_homebrew() {
     fi
 
     print_info "Installing Homebrew..."
+    network_stage_update "Homebrew" "--" "estimating" "phase=bootstrap"
     repair_homebrew_environment || true
     if ! NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
         if resolve_brew_bin >/dev/null 2>&1; then
             print_warn "Homebrew install/update failed. Attempting shallow clone repair and retry."
             repair_homebrew_environment || true
+            network_stage_update "Homebrew" "--" "estimating" "phase=update"
             brew_cmd update --force --quiet >/dev/null 2>&1 || true
         fi
 
@@ -246,6 +567,7 @@ ensure_runtime_dependencies() {
     if ! command -v python3 >/dev/null 2>&1; then
         if brew_is_healthy; then
             print_info "Installing missing dependency: python3"
+            network_stage_update "python3" "--" "estimating" "phase=brew-install"
             HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install python >/dev/null 2>&1 || had_error=1
         else
             print_warn "python3 is missing and Homebrew is unavailable right now."
@@ -257,8 +579,6 @@ ensure_runtime_dependencies() {
 }
 
 ensure_go_installed() {
-    local install_status=0
-
     ensure_brew_in_path
 
     if command -v go >/dev/null 2>&1; then
@@ -266,42 +586,69 @@ ensure_go_installed() {
         return 0
     fi
 
-    if ! brew_is_healthy; then
-        print_warn "go is missing and Homebrew is unavailable right now."
-        return 1
-    fi
-
-    repair_homebrew_environment || true
-
-    print_info "Installing Golang (go) via Homebrew..."
-    if ! HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install go; then
-        install_status=$?
-        print_warn "Initial go install failed. Retrying after Homebrew repair/update."
-        repair_homebrew_environment || true
-        brew_cmd update --force --quiet >/dev/null 2>&1 || true
-        HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install go
-        install_status=$?
-    fi
-
-    if [[ "$install_status" -eq 0 ]]; then
+    print_info "Installing Golang (go) from official package..."
+    if install_go_official_pkg; then
         hash -r
         if command -v go >/dev/null 2>&1; then
             print_ok "go installed successfully: $(command -v go)"
             return 0
         fi
-
-        if [[ -x /opt/homebrew/bin/go ]]; then
-            print_ok "go installed successfully: /opt/homebrew/bin/go"
-            return 0
-        fi
-
-        if [[ -x /usr/local/bin/go ]]; then
-            print_ok "go installed successfully: /usr/local/bin/go"
+        if [[ -x /usr/local/go/bin/go ]]; then
+            print_ok "go installed successfully: /usr/local/go/bin/go"
             return 0
         fi
     fi
 
-    print_err "go installation failed. Check Homebrew output above for exact reason."
+    print_warn "Official Go pkg install failed. Trying userland Go install (no admin)."
+    if install_go_userland_tgz; then
+        hash -r
+        if command -v go >/dev/null 2>&1; then
+            print_ok "go installed successfully: $(command -v go)"
+            return 0
+        fi
+        if [[ -n "${GOROOT:-}" && -x "${GOROOT}/bin/go" ]]; then
+            print_ok "go installed successfully: ${GOROOT}/bin/go"
+            return 0
+        fi
+    fi
+
+    print_warn "Userland Go install failed. Falling back to Homebrew."
+    if ! brew_is_healthy; then
+        print_warn "Homebrew is unavailable right now for fallback install."
+        return 1
+    fi
+
+    repair_homebrew_environment || true
+    network_stage_update "Golang" "--" "estimating" "phase=brew-install"
+    if ! HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install go; then
+        print_warn "Homebrew go install failed. Retrying after Homebrew repair/update."
+        repair_homebrew_environment || true
+        network_stage_update "Golang" "--" "estimating" "phase=brew-update"
+        brew_cmd update --force --quiet >/dev/null 2>&1 || true
+        network_stage_update "Golang" "--" "estimating" "phase=brew-install-retry"
+        if ! HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install go; then
+            print_err "go installation failed via official package and Homebrew fallback."
+            return 1
+        fi
+    fi
+
+    hash -r
+    if command -v go >/dev/null 2>&1; then
+        print_ok "go installed successfully: $(command -v go)"
+        return 0
+    fi
+
+    if [[ -x /opt/homebrew/bin/go ]]; then
+        print_ok "go installed successfully: /opt/homebrew/bin/go"
+        return 0
+    fi
+
+    if [[ -x /usr/local/bin/go ]]; then
+        print_ok "go installed successfully: /usr/local/bin/go"
+        return 0
+    fi
+
+    print_err "go install completed but binary was not found in PATH."
     return 1
 }
 
@@ -317,10 +664,8 @@ attempt_dependency_repair() {
     fi
 
     if grep -qiE 'command not found: go|go: command not found' "$log_file"; then
-        if brew_is_healthy; then
-            print_info "Auto-fix: installing go"
-            HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install go >/dev/null 2>&1 && repaired=1
-        fi
+        print_info "Auto-fix: installing go"
+        ensure_go_installed >/dev/null 2>&1 && repaired=1
     fi
 
     if grep -qiE 'command not found: git|git: command not found' "$log_file"; then

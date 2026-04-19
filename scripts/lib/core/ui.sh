@@ -36,6 +36,23 @@ clear_inline_status() {
     fi
 }
 
+normalize_stage_label() {
+    local raw="$1"
+    local normalized
+
+    normalized="$(printf '%s' "$raw" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+    if [[ -z "$normalized" ]]; then
+        printf '%s' ""
+        return 0
+    fi
+
+    if [[ "${#normalized}" -gt 120 ]]; then
+        normalized="${normalized:0:117}..."
+    fi
+
+    printf '%s' "$normalized"
+}
+
 spinner_wait() {
     local pid="$1"
     local label="$2"
@@ -75,6 +92,7 @@ spinner_wait_with_stages() {
     while kill -0 "$pid" >/dev/null 2>&1; do
         if [[ -f "$stage_file" ]]; then
             current_stage="$(tail -n 1 "$stage_file" 2>/dev/null || echo '')"
+            current_stage="$(normalize_stage_label "$current_stage")"
             if [[ -n "$current_stage" && "$current_stage" != "$last_stage" ]]; then
                 last_stage="$current_stage"
             fi

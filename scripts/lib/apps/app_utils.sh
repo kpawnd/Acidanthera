@@ -175,8 +175,8 @@ monitor_download_progress() {
     local speed_bps=0
     local speed_display=""
     local size_mb=0
-    local total_mb=0
     local percent=0
+    local percent_display="--"
     local remaining_bytes=0
     local eta_seconds=0
     local eta_display=""
@@ -214,9 +214,11 @@ monitor_download_progress() {
                 fi
 
                 # Calculate ETA if total size is known
-                eta_display=""
+                eta_display="--"
+                percent_display="--"
                 if [[ -n "$total_size" && "$total_size" != "0" && $total_size -gt 0 && $speed_bps -gt 0 ]]; then
                     percent=$(( (current_size * 100) / total_size ))
+                    percent_display="${percent}%"
                     remaining_bytes=$(( total_size - current_size ))
                     if [[ $remaining_bytes -gt 0 ]]; then
                         eta_seconds=$(( remaining_bytes / speed_bps ))
@@ -224,18 +226,22 @@ monitor_download_progress() {
                         if [[ $eta_seconds -gt 3600 ]]; then
                             local eta_h=$(( eta_seconds / 3600 ))
                             local eta_m=$(( (eta_seconds % 3600) / 60 ))
-                            eta_display=" - ${percent}% | ETA ${eta_h}h ${eta_m}m"
+                            eta_display="${eta_h}h ${eta_m}m"
                         elif [[ $eta_seconds -gt 60 ]]; then
                             local eta_m=$(( eta_seconds / 60 ))
                             local eta_s=$(( eta_seconds % 60 ))
-                            eta_display=" - ${percent}% | ETA ${eta_m}m ${eta_s}s"
+                            eta_display="${eta_m}m ${eta_s}s"
                         else
-                            eta_display=" - ${percent}% | ETA ${eta_seconds}s"
+                            eta_display="${eta_seconds}s"
                         fi
+                    else
+                        percent=100
+                        percent_display="100%"
+                        eta_display="0s"
                     fi
                 fi
 
-                echo "Downloading ${app_name} - ${size_mb}MB @ ${speed_display}${eta_display}" > "$stage_file" 2>/dev/null || true
+                echo "NET | ${app_name} | speed=${speed_display} | eta=${eta_display} | progress=${percent_display} | downloaded=${size_mb}MB" > "$stage_file" 2>/dev/null || true
             fi
 
             last_size=$current_size

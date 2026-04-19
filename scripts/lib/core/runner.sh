@@ -18,7 +18,8 @@ run_step_interactive() {
 retry_with_dependency_fix() {
     local step_name="$1"
     local log_file="$2"
-    shift 2
+    local stage_file="$3"
+    shift 3
 
     if ! declare -F attempt_dependency_repair >/dev/null 2>&1; then
         return 1
@@ -31,29 +32,37 @@ retry_with_dependency_fix() {
     print_info "Retrying step after dependency repair: $step_name"
 
     : > "$log_file"
+    : > "$stage_file"
+    export ACID_STAGE_FILE="$stage_file"
     "$@" >"$log_file" 2>&1 &
     local pid=$!
-    spinner_wait "$pid" "$step_name (retry)"
+    spinner_wait_with_stages "$pid" "$step_name (retry)" "$stage_file"
 }
 
 run_step() {
     local step_name="$1"
     shift
     local log_file
+    local stage_file
     local status
 
     TOTAL_STEPS=$((TOTAL_STEPS + 1))
     log_file="$(mktemp)"
+    stage_file="$(mktemp)"
 
+    : > "$stage_file"
+    export ACID_STAGE_FILE="$stage_file"
     "$@" >"$log_file" 2>&1 &
     local pid=$!
-    spinner_wait "$pid" "$step_name"
+    spinner_wait_with_stages "$pid" "$step_name" "$stage_file"
     status=$?
 
     if [[ "$status" -ne 0 ]]; then
-        retry_with_dependency_fix "$step_name" "$log_file" "$@"
+        retry_with_dependency_fix "$step_name" "$log_file" "$stage_file" "$@"
         status=$?
     fi
+
+    unset ACID_STAGE_FILE
 
     if [[ "$status" -eq 0 ]]; then
         print_ok "$step_name completed"
@@ -66,5 +75,5 @@ run_step() {
         fi
     fi
 
-    rm -f "$log_file" >/dev/null 2>&1 || true
+    rm -f "$log_file" "$stage_file" >/dev/null 2>&1 || true
 }
