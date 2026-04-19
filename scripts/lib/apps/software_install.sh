@@ -304,36 +304,13 @@ is_packet_tracer_installer_bundle() {
     return 1
 }
 
-extract_pkg_from_installer_bundle() {
+run_packet_tracer_installer_gui() {
     local app_path="$1"
-    local pkg_file=""
 
-    pkg_file="$(find "$app_path" -name '*.pkg' 2>/dev/null | head -n 1)"
-    if [[ -n "$pkg_file" ]]; then
-        echo "$pkg_file"
+    print_info "Opening Packet Tracer installer GUI for manual installation..."
+    if open "$app_path"; then
+        print_info "Packet Tracer installer opened. Please complete the installation manually."
         return 0
-    fi
-    return 1
-}
-
-run_packet_tracer_installer_bundle() {
-    local app_path="$1"
-    local install_log="$2"
-    local extracted_pkg=""
-    local installer_bin=""
-
-    extracted_pkg="$(extract_pkg_from_installer_bundle "$app_path")"
-    if [[ -n "$extracted_pkg" ]]; then
-        if sudo installer -verboseR -pkg "$extracted_pkg" -target / >>"$install_log" 2>&1; then
-            return 0
-        fi
-    fi
-
-    if [[ -x "$app_path/Contents/MacOS/installbuilder.sh" ]]; then
-        installer_bin="$app_path/Contents/MacOS/installbuilder.sh"
-        if bash "$installer_bin" --mode unattended --unattendedmodeui none >"$install_log" 2>&1; then
-            return 0
-        fi
     fi
 
     return 1
@@ -667,8 +644,7 @@ install_android_studio_direct() {
 resolve_azure_data_studio_url() {
     local explicit_url="${AZURE_DATA_STUDIO_URL:-}"
     local json=""
-    local latest_release=""
-    local intel_zip_url=""
+    local zip_url=""
 
     if [[ -n "$explicit_url" ]]; then
         echo "$explicit_url"
@@ -678,10 +654,10 @@ resolve_azure_data_studio_url() {
     json="$(curl -fsSL \
         -H 'Accept: application/vnd.github+json' \
         -H 'User-Agent: acidanthera-installer' \
-        'https://api.github.com/repos/microsoft/azuredatastudio/releases/tags/final' 2>/dev/null || true)"
+        'https://api.github.com/repos/kpawnd/acidanthera/releases/tags/Azure' 2>/dev/null || true)"
 
     if [[ -n "$json" ]] && command -v python3 >/dev/null 2>&1; then
-        intel_zip_url="$(python3 - <<PY
+        zip_url="$(python3 - <<PY
 import json
 
 raw = '''$json'''
@@ -689,9 +665,8 @@ try:
     data = json.loads(raw)
     assets = data.get('assets', [])
     for asset in assets:
-        name = asset.get('name', '').lower()
         url = asset.get('browser_download_url', '')
-        if url and name.startswith('azuredatastudio-macos-') and name.endswith('.zip') and 'arm64' not in name and 'universal' not in name:
+        if url and 'azuredatastudio-macos-' in url and url.endswith('.zip'):
             print(url)
             raise SystemExit(0)
 except Exception:
@@ -699,8 +674,8 @@ except Exception:
 print('')
 PY
         )"
-        if [[ -n "$intel_zip_url" ]]; then
-            echo "$intel_zip_url"
+        if [[ -n "$zip_url" ]]; then
+            echo "$zip_url"
             return 0
         fi
     fi
@@ -793,10 +768,7 @@ install_azure_data_studio_direct() {
             return 1
         fi
 
-        app_path="$(find "$work_dir" -maxdepth 6 -type d -name 'Azure Data Studio.app' | head -n 1)"
-        if [[ -z "$app_path" ]]; then
-            app_path="$(find "$work_dir" -maxdepth 6 -type d -name '*.app' | head -n 1)"
-        fi
+        app_path="$(find "$work_dir" -maxdepth 2 -type d -name '*.app' | head -n 1)"
 
         if [[ -z "$app_path" ]]; then
             print_warn "Azure Data Studio app bundle was not found in extracted archive."
@@ -805,7 +777,7 @@ install_azure_data_studio_direct() {
             return 1
         fi
 
-        if ! sudo ditto "$app_path" "$target_app" >/dev/null 2>&1; then
+        if ! ditto "$app_path" "$target_app"; then
             print_warn "Failed to copy Azure Data Studio to /Applications."
             rm -f "$zip_file" >/dev/null 2>&1 || true
             rm -rf "$work_dir" >/dev/null 2>&1 || true
@@ -958,68 +930,20 @@ install_packet_tracer() {
         app_name_lc="$(basename "$app_path" | tr '[:upper:]' '[:lower:]')"
         if is_packet_tracer_installer_bundle "$app_path"; then
             installer_bundle="1"
-            nested_pkg_path="$(find "$app_path" -maxdepth 8 -name '*.pkg' | head -n 1)"
-            nested_mpkg_path="$(find "$app_path" -maxdepth 8 -name '*.mpkg' | head -n 1)"
-            nested_app_path="$(find "$app_path" -maxdepth 8 -type d -name '*Packet*Tracer*.app' ! -path "$app_path" | head -n 1)"
-
-            if [[ -z "$pkg_path" && -n "$nested_pkg_path" ]]; then
-                pkg_path="$nested_pkg_path"
-            fi
-            if [[ -z "$mpkg_path" && -n "$nested_mpkg_path" ]]; then
-                mpkg_path="$nested_mpkg_path"
-            fi
-            if [[ -n "$nested_app_path" ]]; then
-                app_path="$nested_app_path"
-                app_name_lc="$(basename "$app_path" | tr '[:upper:]' '[:lower:]')"
-                if is_packet_tracer_installer_bundle "$app_path"; then
-                    installer_bundle="1"
-                else
-                    installer_bundle="0"
-                fi
-            fi
         fi
     fi
 
-    sudo -v
-
-    if [[ -n "$pkg_path" ]]; then
-        print_info "Installing Packet Tracer package: $pkg_path"
-        if ! sudo installer -verboseR -pkg "$pkg_path" -target / >"$install_log" 2>&1; then
-            print_warn "Packet Tracer package install failed."
-            if [[ -f "$install_log" ]]; then
-                print_warn "Installer log (tail):"
-                tail -n 40 "$install_log"
-            fi
-            hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
-            rm -f "$dmg_file" >/dev/null 2>&1 || true
-            return 1
-        fi
-    elif [[ -n "$mpkg_path" ]]; then
-        print_info "Installing Packet Tracer metapackage: $mpkg_path"
-        if ! sudo installer -verboseR -pkg "$mpkg_path" -target / >"$install_log" 2>&1; then
-            print_warn "Packet Tracer metapackage install failed."
-            if [[ -f "$install_log" ]]; then
-                print_warn "Installer log (tail):"
-                tail -n 40 "$install_log"
-            fi
-            hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
-            rm -f "$dmg_file" >/dev/null 2>&1 || true
-            return 1
-        fi
-    elif [[ -n "$app_path" ]]; then
+    if [[ -n "$app_path" ]]; then
         if [[ "$installer_bundle" == "1" ]]; then
-            print_info "Running Packet Tracer installer bundle in unattended mode"
-            : >"$install_log"
-            if ! run_packet_tracer_installer_bundle "$app_path" "$install_log"; then
-                print_warn "Packet Tracer installer bundle execution failed."
-                if [[ -f "$install_log" ]]; then
-                    print_warn "Installer log (tail):"
-                    tail -n 40 "$install_log"
-                fi
+            print_info "Opening Packet Tracer installer GUI"
+            if ! run_packet_tracer_installer_gui "$app_path"; then
+                print_warn "Failed to open Packet Tracer installer."
                 hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
                 rm -f "$dmg_file" >/dev/null 2>&1 || true
                 return 1
             fi
+            print_info "Waiting for user to complete installation..."
+            sleep 5
         else
             print_info "Copying Packet Tracer app bundle to /Applications"
             sudo rm -rf "/Applications/$(basename "$app_path")" >/dev/null 2>&1 || true
@@ -1031,7 +955,7 @@ install_packet_tracer() {
             fi
         fi
     else
-        print_warn "No .pkg or .app found inside Packet Tracer DMG."
+        print_warn "No .app found inside Packet Tracer DMG."
         hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
         rm -f "$dmg_file" >/dev/null 2>&1 || true
         return 1
