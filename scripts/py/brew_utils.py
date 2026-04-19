@@ -58,11 +58,11 @@ if __name__ == "__main__":
     command = sys.argv[1]
     
     if command == "cask-version":
-        json_input = sys.stdin.read() if not sys.isatty(0) else ""
+        json_input = sys.stdin.read() if not sys.stdin.isatty() else ""
         print(extract_brew_cask_version(json_input))
     
     elif command == "cask-url":
-        json_input = sys.stdin.read() if not sys.isatty(0) else ""
+        json_input = sys.stdin.read() if not sys.stdin.isatty() else ""
         print(extract_brew_cask_url(json_input))
     
     else:

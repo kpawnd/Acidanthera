@@ -96,11 +96,11 @@ if __name__ == "__main__":
         json_input = sys.stdin.read()
         print(find_android_studio_asset(json_input))
     elif command == "azure-asset":
-        json_input = sys.stdin.read() if not sys.isatty(0) else ""
+        json_input = sys.stdin.read() if not sys.stdin.isatty() else ""
         print(find_azure_data_studio_asset(json_input))
     
     elif command == "packet-tracer-asset":
-        json_input = sys.stdin.read() if not sys.isatty(0) else ""
+        json_input = sys.stdin.read() if not sys.stdin.isatty() else ""
         print(find_packet_tracer_asset(json_input))
     
     else:
