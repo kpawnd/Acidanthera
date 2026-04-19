@@ -118,11 +118,13 @@ install_azure_data_studio_direct() {
         fi
 
         echo "Copying to /Applications" > "$stage_file" 2>/dev/null || true
-        if ! sudo ditto "$app_path" "$target_app" >/dev/null 2>&1; then
-            print_warn "Failed to copy Azure Data Studio to /Applications."
-            hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
-            rm -f "$dmg_file" >/dev/null 2>&1 || true
-            return 1
+        if ! sudo -n ditto "$app_path" "$target_app" >/dev/null 2>&1; then
+            if ! sudo ditto "$app_path" "$target_app" >/dev/null 2>&1; then
+                print_warn "Failed to copy Azure Data Studio to /Applications."
+                hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+                rm -f "$dmg_file" >/dev/null 2>&1 || true
+                return 1
+            fi
         fi
 
         echo "Cleaning up" > "$stage_file" 2>/dev/null || true
@@ -330,12 +332,14 @@ install_packet_tracer() {
             fi
         else
             echo "Copying app bundle to /Applications" > "$stage_file" 2>/dev/null || true
-            sudo rm -rf "/Applications/$(basename "$app_path")" >/dev/null 2>&1 || true
-            if ! sudo ditto "$app_path" "/Applications/$(basename "$app_path")" >/dev/null 2>&1; then
-                print_warn "Packet Tracer app copy failed."
-                hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
-                rm -f "$dmg_file" >/dev/null 2>&1 || true
-                return 1
+            sudo -n rm -rf "/Applications/$(basename "$app_path")" >/dev/null 2>&1 || sudo rm -rf "/Applications/$(basename "$app_path")" >/dev/null 2>&1 || true
+            if ! sudo -n ditto "$app_path" "/Applications/$(basename "$app_path")" >/dev/null 2>&1; then
+                if ! sudo ditto "$app_path" "/Applications/$(basename "$app_path")" >/dev/null 2>&1; then
+                    print_warn "Packet Tracer app copy failed."
+                    hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+                    rm -f "$dmg_file" >/dev/null 2>&1 || true
+                    return 1
+                fi
             fi
         fi
     else
@@ -346,9 +350,14 @@ install_packet_tracer() {
     fi
 
     echo "Verifying installation" > "$stage_file" 2>/dev/null || true
+    sleep 1  # Give filesystem time to sync
     installed_app="$(find_installed_packet_tracer_app)"
     if [[ -z "$installed_app" ]]; then
+        # Log what we found for debugging
         print_warn "Packet Tracer install command completed but app was not found in /Applications."
+        find /Applications -maxdepth 3 -type d -name '*[Pp]acket*[Tt]racer*' 2>/dev/null | while read d; do
+            print_info "  Found: $d"
+        done
         hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
         rm -f "$dmg_file" >/dev/null 2>&1 || true
         return 1
@@ -360,10 +369,6 @@ install_packet_tracer() {
     print_ok "Cisco Packet Tracer installation completed: $installed_app"
     return 0
 }
-
-# ============================================================================
-# Main Orchestration
-# ============================================================================
 
 get_android_studio_dmg_url() {
     local json=""

@@ -275,6 +275,7 @@ is_packet_tracer_installer_bundle() {
 find_installed_packet_tracer_app() {
     local candidate=""
 
+    # First try direct match in /Applications
     while IFS= read -r candidate; do
         [[ -z "$candidate" ]] && continue
         if is_packet_tracer_installer_bundle "$candidate"; then
@@ -283,6 +284,17 @@ find_installed_packet_tracer_app() {
         echo "$candidate"
         return 0
     done < <(find /Applications -maxdepth 1 -type d -name '*Packet*Tracer*.app' 2>/dev/null)
+
+    # If not found, search recursively for nested app bundles
+    # (e.g., /Applications/Cisco Packet Tracer 9.0.0/PacketTracer.app)
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] && continue
+        if is_packet_tracer_installer_bundle "$candidate"; then
+            continue
+        fi
+        echo "$candidate"
+        return 0
+    done < <(find /Applications -maxdepth 3 -type d -name '*Packet*Tracer*.app' 2>/dev/null | grep -v '/Contents/' | head -5)
 
     echo ""
     return 1
@@ -293,15 +305,9 @@ run_packet_tracer_installer_unattended() {
     local app_path="$1"
     local install_log="$2"
     local mount_point="$3"
-    local installer_bin=""
     local app_name=""
     local version=""
     local install_dir=""
-
-    installer_bin="$(find "$app_path/Contents/MacOS" -maxdepth 1 -type f -perm -111 | head -n 1)"
-    if [[ -z "$installer_bin" ]]; then
-        return 1
-    fi
 
     app_name="$(basename "$app_path" .app)"
     version="$(printf '%s' "$app_name" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
@@ -312,7 +318,9 @@ run_packet_tracer_installer_unattended() {
     install_dir="/Applications/Cisco Packet Tracer $version"
     mkdir -p "$install_dir" || true
 
-    if sudo "$installer_bin" install \
+    # Use full path to installer executable as shown in user's working example
+    # Format: sudo "/path/to/app.app/Contents/MacOS/executable" install --root ... --accept-licenses --accept-messages --confirm-command
+    if sudo "$app_path/Contents/MacOS/$app_name" install \
         --root "$install_dir" \
         --accept-licenses \
         --accept-messages \
@@ -423,7 +431,7 @@ reinstall_cask_app() {
     local app_path="$2"
     local display_name="$3"
     local stage_file="${4:-}"
-    local supported_ver
+    local supported_ver="unknown"
     local installed_ver=""
     local attempt=1
     local max_attempts=3
@@ -433,28 +441,43 @@ reinstall_cask_app() {
         return 1
     fi
 
-    echo "Checking supported version" > "$stage_file" 2>/dev/null || true
-    supported_ver="$(get_brew_cask_version "$token")"
+    # Fast path: Check if app is already installed locally FIRST
+    if [[ -d "$app_path" ]]; then
+        echo "Checking installed version" > "$stage_file" 2>/dev/null || true
+        installed_ver="$(get_app_version "$app_path")"
+        if [[ -n "$installed_ver" && "$installed_ver" != "unknown" ]]; then
+            echo "Checking supported version" > "$stage_file" 2>/dev/null || true
+            supported_ver="$(get_brew_cask_version "$token")"
+            if [[ "$supported_ver" != "unknown" ]] && versions_match_latest "$installed_ver" "$supported_ver"; then
+                print_ok "$display_name already at latest supported version ($installed_ver). Skipping reinstall."
+                record_cask_lock "$token" "$app_path" || true
+                return 0
+            fi
+        fi
+    fi
+
+    # Slow path: App not found or version mismatch, need to install
+    # Only fetch supported version again if we haven't already
+    if [[ "$supported_ver" == "unknown" ]]; then
+        echo "Checking supported version" > "$stage_file" 2>/dev/null || true
+        supported_ver="$(get_brew_cask_version "$token")"
+    fi
+    
     if [[ "$supported_ver" == "unknown" ]]; then
         print_warn "$display_name cask metadata is unavailable for this Homebrew/macOS state."
     fi
     print_info "$display_name supported cask version for this macOS: $supported_ver"
 
-    if [[ -d "$app_path" ]]; then
-        installed_ver="$(get_app_version "$app_path")"
-        if versions_match_latest "$installed_ver" "$supported_ver"; then
-            print_ok "$display_name already at latest supported version ($installed_ver). Skipping reinstall."
-            record_cask_lock "$token" "$app_path" || true
-            return 0
-        fi
-    fi
-
     echo "Removing old version" > "$stage_file" 2>/dev/null || true
     print_info "Removing old $display_name version (if present)..."
     brew_cmd uninstall --cask --force "$token" >/dev/null 2>&1 || true
     if [[ -d "$app_path" ]]; then
-        if ! sudo rm -rf "$app_path"; then
-            print_warn "Could not remove old app bundle: $app_path"
+        # Retry sudo with -n flag if keepalive is active
+        if ! sudo -n rm -rf "$app_path" 2>/dev/null; then
+            # Fall back to non-n flag if keepalive expired
+            if ! sudo rm -rf "$app_path" 2>/dev/null; then
+                print_warn "Could not remove old app bundle: $app_path"
+            fi
         fi
     fi
 

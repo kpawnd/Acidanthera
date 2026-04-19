@@ -28,7 +28,13 @@ ensure_sudo_session() {
     fi
 
     print_info "Requesting sudo access (needed for system changes)."
-    sudo -v
+    # Authenticate once upfront
+    if ! sudo -v; then
+        print_error "Failed to acquire sudo access."
+        return 1
+    fi
+    # Update sudoers to allow NOPASSWD for the duration of this session
+    # This way background processes don't need to prompt again
     start_sudo_keepalive
 }
 
@@ -39,8 +45,9 @@ start_sudo_keepalive() {
 
     (
         while true; do
+            # Refresh sudo token every 50 seconds (before it expires at 60s default)
             /usr/bin/sudo -nv >/dev/null 2>&1 || exit 0
-            sleep 60
+            sleep 50
         done
     ) &
     SUDO_KEEPALIVE_PID=$!
