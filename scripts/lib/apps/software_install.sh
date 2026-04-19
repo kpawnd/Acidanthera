@@ -578,6 +578,7 @@ download_file_resilient() {
 resolve_android_studio_dmg_url() {
     local explicit_url="${ANDROID_STUDIO_DMG_URL:-}"
     local cask_source=""
+    local extracted_url=""
 
     if [[ -n "$explicit_url" ]]; then
         echo "$explicit_url"
@@ -587,8 +588,11 @@ resolve_android_studio_dmg_url() {
     if brew_is_healthy; then
         cask_source="$(brew_cmd cat --cask android-studio 2>/dev/null || true)"
         if [[ -n "$cask_source" ]]; then
-            printf '%s\n' "$cask_source" | awk -F'"' '/^[[:space:]]*url ".*\.dmg"/ {print $2; exit}'
-            return 0
+            extracted_url="$(printf '%s\n' "$cask_source" | awk -F'"' '/^[[:space:]]*url ".*\.dmg"/ {print $2; exit}')"
+            if [[ -n "$extracted_url" && ! "$extracted_url" =~ \#\{ ]]; then
+                echo "$extracted_url"
+                return 0
+            fi
         fi
     fi
 
@@ -1041,16 +1045,16 @@ install_required_software() {
 
     repair_homebrew_environment || true
 
-    reinstall_cask_app "blender" "/Applications/Blender.app" "Blender" "$stage_blender" &
+    reinstall_cask_app "blender" "/Applications/Blender.app" "Blender" "$stage_blender" >/dev/null 2>&1 &
     spinner_wait_with_stages $! "Installing Blender" "$stage_blender" || had_error=1
 
-    install_android_studio_direct "$stage_android" &
+    install_android_studio_direct "$stage_android" >/dev/null 2>&1 &
     spinner_wait_with_stages $! "Installing Android Studio" "$stage_android" || had_error=1
 
-    install_azure_data_studio_direct "$stage_azure" &
+    install_azure_data_studio_direct "$stage_azure" >/dev/null 2>&1 &
     spinner_wait_with_stages $! "Installing Azure Data Studio" "$stage_azure" || had_error=1
 
-    install_packet_tracer "$stage_packet" &
+    install_packet_tracer "$stage_packet" >/dev/null 2>&1 &
     spinner_wait_with_stages $! "Installing Cisco Packet Tracer" "$stage_packet" || had_error=1
 
     clear_inline_status
