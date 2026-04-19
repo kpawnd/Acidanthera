@@ -319,24 +319,19 @@ extract_pkg_from_installer_bundle() {
 run_packet_tracer_installer_bundle() {
     local app_path="$1"
     local install_log="$2"
-    local extracted_pkg=""
-    local installer_bin=""
-
-    extracted_pkg="$(extract_pkg_from_installer_bundle "$app_path")"
-    if [[ -n "$extracted_pkg" ]]; then
-        if sudo installer -verboseR -pkg "$extracted_pkg" -target / >>"$install_log" 2>&1; then
-            return 0
-        fi
+    if [[ -z "$app_path" ]]; then
+        echo "[ERROR] run_packet_tracer_installer_bundle: missing .app path argument."
+        return 1
     fi
-
-    if [[ -x "$app_path/Contents/MacOS/installbuilder.sh" ]]; then
-        installer_bin="$app_path/Contents/MacOS/installbuilder.sh"
-        if bash "$installer_bin" --mode unattended --unattendedmodeui none >"$install_log" 2>&1; then
-            return 0
-        fi
+    # GUI/manual install only
+    if [[ ! -d "$app_path" ]]; then
+        echo "[WARN] No installer app found to open."
+        return 1
     fi
-
-    return 1
+    print_info "Opening Packet Tracer installer GUI. Please complete the installation manually."
+    open "$app_path"
+    echo "[INFO] Please follow the on-screen instructions to complete the Packet Tracer installation."
+    return 0
 }
 
 find_installed_packet_tracer_app() {
