@@ -211,18 +211,23 @@ monitor_download_progress() {
 
                 # Calculate ETA if total size is known
                 eta_display=""
-                if [[ -n "$total_size" && $total_size -gt 0 && $speed_bps -gt 0 ]]; then
-                    total_mb=$((total_size / 1048576))
+                if [[ -n "$total_size" && "$total_size" != "0" && $total_size -gt 0 && $speed_bps -gt 0 ]]; then
                     percent=$(( (current_size * 100) / total_size ))
                     remaining_bytes=$(( total_size - current_size ))
-                    eta_seconds=$(( remaining_bytes / speed_bps ))
-                    
-                    if [[ $eta_seconds -gt 3600 ]]; then
-                        eta_display=" - ETA $(( eta_seconds / 3600 ))h$((( eta_seconds % 3600 ) / 60))m ($percent%)"
-                    elif [[ $eta_seconds -gt 60 ]]; then
-                        eta_display=" - ETA $((eta_seconds / 60))m$((eta_seconds % 60))s ($percent%)"
-                    else
-                        eta_display=" - ETA ${eta_seconds}s ($percent%)"
+                    if [[ $remaining_bytes -gt 0 ]]; then
+                        eta_seconds=$(( remaining_bytes / speed_bps ))
+                        
+                        if [[ $eta_seconds -gt 3600 ]]; then
+                            local eta_h=$(( eta_seconds / 3600 ))
+                            local eta_m=$(( (eta_seconds % 3600) / 60 ))
+                            eta_display=" - ${percent}% | ETA ${eta_h}h ${eta_m}m"
+                        elif [[ $eta_seconds -gt 60 ]]; then
+                            local eta_m=$(( eta_seconds / 60 ))
+                            local eta_s=$(( eta_seconds % 60 ))
+                            eta_display=" - ${percent}% | ETA ${eta_m}m ${eta_s}s"
+                        else
+                            eta_display=" - ${percent}% | ETA ${eta_seconds}s"
+                        fi
                     fi
                 fi
 

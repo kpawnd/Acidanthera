@@ -366,22 +366,37 @@ install_packet_tracer() {
 # ============================================================================
 
 get_android_studio_dmg_url() {
-    local brew_url=""
     local json=""
+    local dmg_url=""
     
-    # Try to get Homebrew's actual download URL (usually from faster CDN)
-    if brew_is_healthy && command -v python3 >/dev/null 2>&1; then
-        json="$(brew_cmd info --cask --json=v2 android-studio 2>/dev/null || true)"
+    # Try GitHub releases first
+    if command -v python3 >/dev/null 2>&1; then
+        json="$(curl -fsSL \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: acidanthera-installer' \
+            'https://api.github.com/repos/kpawnd/acidanthera/releases/tags/Android' 2>/dev/null || true)"
         if [[ -n "$json" ]]; then
-            brew_url="$(echo "$json" | python3 "$PY_LIB_DIR/brew_utils.py" cask-url)"
-            if [[ -n "$brew_url" && "$brew_url" != "" ]]; then
-                echo "$brew_url"
+            dmg_url="$(echo "$json" | python3 "$PY_LIB_DIR/github_utils.py" android-asset)"
+            if [[ -n "$dmg_url" ]]; then
+                echo "$dmg_url"
                 return 0
             fi
         fi
     fi
     
-    # Fall back to Google's CDN as last resort
+    # Fall back to Homebrew's CDN
+    if brew_is_healthy && command -v python3 >/dev/null 2>&1; then
+        json="$(brew_cmd info --cask --json=v2 android-studio 2>/dev/null || true)"
+        if [[ -n "$json" ]]; then
+            dmg_url="$(echo "$json" | python3 "$PY_LIB_DIR/brew_utils.py" cask-url)"
+            if [[ -n "$dmg_url" && "$dmg_url" != "" ]]; then
+                echo "$dmg_url"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Final fallback to Google's CDN
     echo "https://edgedl.me.gvt1.com/android/studio/install/2025.3.3.7/android-studio-panda3-patch1-mac.dmg"
 }
 

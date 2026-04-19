@@ -60,6 +60,31 @@ def find_packet_tracer_asset(json_str: str) -> str:
         return ""
 
 
+def find_android_studio_asset(json_str: str) -> str:
+    """
+    Find Android Studio .dmg asset URL from GitHub release JSON.
+    
+    Args:
+        json_str: GitHub API releases/tags/Android response
+        
+    Returns:
+        Asset download URL or empty string
+    """
+    try:
+        data = json.loads(json_str)
+        assets = data.get("assets", [])
+        
+        urls = [a.get("browser_download_url", "") for a in assets]
+        urls = [u for u in urls if u.lower().endswith(".dmg")]
+        
+        if urls:
+            return urls[0]
+        
+        return ""
+    except Exception:
+        return ""
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: github_utils.py <command> [json_input]", file=sys.stderr)
@@ -67,7 +92,10 @@ if __name__ == "__main__":
     
     command = sys.argv[1]
     
-    if command == "azure-asset":
+    if command == "android-asset":
+        json_input = sys.stdin.read()
+        print(find_android_studio_asset(json_input))
+    elif command == "azure-asset":
         json_input = sys.stdin.read() if not sys.isatty(0) else ""
         print(find_azure_data_studio_asset(json_input))
     
