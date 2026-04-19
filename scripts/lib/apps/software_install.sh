@@ -532,8 +532,10 @@ monitor_download_progress() {
     local elapsed=0
     local speed_bps=0
     local speed_mbs=0
+    local speed_kbs=0
     local size_mb=0
     local no_growth_count=0
+    local speed_display=""
 
     start_time=$(date +%s)
     last_time=$start_time
@@ -557,14 +559,17 @@ monitor_download_progress() {
             else
                 no_growth_count=0
                 speed_bps=$(( (current_size - last_size) / elapsed ))
-                speed_mbs=$(( speed_bps / 1048576 ))
                 size_mb=$(( current_size / 1048576 ))
 
-                if [[ $speed_mbs -lt 1 && $speed_bps -gt 0 ]]; then
-                    speed_mbs=0
+                if [[ $speed_bps -ge 1048576 ]]; then
+                    speed_mbs=$(( speed_bps / 1048576 ))
+                    speed_display="${speed_mbs}MB/s"
+                else
+                    speed_kbs=$(( speed_bps / 1024 ))
+                    speed_display="${speed_kbs}KB/s"
                 fi
 
-                echo "Downloading ${app_name} - ${size_mb}MB @ ${speed_mbs}MB/s" > "$stage_file" 2>/dev/null || true
+                echo "Downloading ${app_name} - ${size_mb}MB @ ${speed_display}" > "$stage_file" 2>/dev/null || true
             fi
 
             last_size=$current_size
@@ -632,8 +637,8 @@ download_file_resilient() {
 
 resolve_android_studio_dmg_url() {
     local explicit_url="${ANDROID_STUDIO_DMG_URL:-}"
-    local cask_source=""
-    local extracted_url=""
+    local json=""
+    local dmg_url=""
 
     if [[ -n "$explicit_url" ]]; then
         echo "$explicit_url"
@@ -641,18 +646,34 @@ resolve_android_studio_dmg_url() {
     fi
 
     if brew_is_healthy; then
-        cask_source="$(brew_cmd cat --cask android-studio 2>/dev/null || true)"
-        if [[ -n "$cask_source" ]]; then
-            extracted_url="$(printf '%s\n' "$cask_source" | awk -F'"' '/^[[:space:]]*url ".*\.dmg"/ {print $2; exit}')"
-            if [[ -n "$extracted_url" && ! "$extracted_url" =~ \#\{ ]]; then
-                echo "$extracted_url"
+        json="$(brew_cmd info --cask --json=v2 android-studio 2>/dev/null || true)"
+        if [[ -n "$json" ]] && command -v python3 >/dev/null 2>&1; then
+            dmg_url="$(python3 - <<PY
+import json
+
+raw = '''$json'''
+try:
+    data = json.loads(raw)
+    casks = data.get("casks", [])
+    if casks:
+        url = casks[0].get("url", "")
+        if url and not "#{" in url:
+            print(url)
+            raise SystemExit(0)
+except Exception:
+    pass
+print("")
+PY
+            )"
+            if [[ -n "$dmg_url" ]]; then
+                echo "$dmg_url"
                 return 0
             fi
         fi
     fi
 
-    echo "https://edgedl.me.gvt1.com/android/studio/install/2025.3.3.7/android-studio-panda3-patch1-mac.dmg"
-    return 0
+    echo ""
+    return 1
 }
 
 install_android_studio_direct() {
