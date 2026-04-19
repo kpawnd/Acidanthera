@@ -682,26 +682,34 @@ resolve_azure_data_studio_url() {
 
     if [[ -n "$json" ]] && command -v python3 >/dev/null 2>&1; then
         intel_zip_url="$(python3 - <<PY
-import json
-
-raw = '''$json'''
-try:
-    data = json.loads(raw)
-    assets = data.get('assets', [])
-    for asset in assets:
-        name = asset.get('name', '').lower()
-        url = asset.get('browser_download_url', '')
-        if url and name.startswith('azuredatastudio-macos-') and name.endswith('.zip') and 'arm64' not in name and 'universal' not in name:
-            print(url)
-            raise SystemExit(0)
-except Exception:
-    pass
-print('')
-PY
         )"
         if [[ -n "$intel_zip_url" ]]; then
             echo "$intel_zip_url"
             return 0
+        fi
+    fi
+
+    echo ""
+    return 1
+    local explicit_url="${AZURE_DATA_STUDIO_URL:-}"
+    local cask_source=""
+    local cask_url=""
+
+    if [[ -n "$explicit_url" ]]; then
+        echo "$explicit_url"
+        return 0
+    fi
+
+    # Use Homebrew cask tap method to get the download URL
+    if brew_is_healthy; then
+        brew tap homebrew/cask-versions >/dev/null 2>&1 || true
+        cask_source="$(brew info --cask --json=v2 azure-data-studio 2>/dev/null || true)"
+        if [[ -n "$cask_source" ]]; then
+            cask_url="$(echo "$cask_source" | python3 -c 'import sys, json; data=json.load(sys.stdin); print(data["casks"][0]["url"] if data.get("casks") else "")')"
+            if [[ -n "$cask_url" ]]; then
+                echo "$cask_url"
+                return 0
+            fi
         fi
     fi
 
@@ -908,21 +916,21 @@ install_packet_tracer() {
 
     dmg_url="$(resolve_packet_tracer_dmg_url)"
 
-    if [[ -z "$dmg_url" ]]; then
-        print_warn "Could not resolve Cisco Packet Tracer DMG URL."
-        print_warn "Expected a .dmg asset under release tag 'cisco' in the configured GitHub repo."
-        print_warn "Set PACKET_TRACER_DMG_URL manually to override."
+    local app_path="$1"
+    local install_log="$2"
+    local installer_app=""
+
+    # Find the .app bundle (installer)
+    installer_app="$app_path"
+    if [[ ! -d "$installer_app" ]]; then
+        echo "[WARN] No installer app found to open."
         return 1
     fi
 
-    print_info "Using Packet Tracer DMG URL: $dmg_url"
-
-    rm -f "$dmg_file" >/dev/null 2>&1 || true
-    if ! download_file_resilient "$dmg_url" "$dmg_file"; then
-        print_warn "Failed to download Cisco Packet Tracer DMG."
-        return 1
-    fi
-
+    print_info "Opening Packet Tracer installer GUI. Please complete the installation manually."
+    open "$installer_app"
+    echo "[INFO] Please follow the on-screen instructions to complete the Packet Tracer installation."
+    return 0
     if ! hdiutil verify "$dmg_file" >/dev/null 2>&1; then
         print_warn "Downloaded Cisco Packet Tracer DMG failed integrity verification."
         rm -f "$dmg_file" >/dev/null 2>&1 || true
