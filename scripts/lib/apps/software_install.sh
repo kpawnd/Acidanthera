@@ -678,12 +678,10 @@ install_android_studio_direct() {
         return 0
     fi
 
+def collect_urls(release_obj):
+
     print_warn "Android Studio installation completed but app was not found at $target_app"
     return 1
-
-def collect_urls(release_obj):
-resolve_azure_data_studio_url() {
-}
 
 resolve_azure_data_studio_url() {
     local explicit_url="${AZURE_DATA_STUDIO_URL:-}"
