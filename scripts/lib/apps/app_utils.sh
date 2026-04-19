@@ -436,6 +436,11 @@ reinstall_cask_app() {
     local attempt=1
     local max_attempts=3
 
+    # Initialize stage file with default value
+    if [[ -n "$stage_file" ]]; then
+        echo "Checking app" > "$stage_file"
+    fi
+
     if ! brew_is_healthy; then
         print_warn "Homebrew unavailable; cannot install $display_name."
         return 1
@@ -485,7 +490,7 @@ reinstall_cask_app() {
         resolve_brew_download_locks_for_token "$token" || true
         echo "Installing ($attempt/$max_attempts)" > "$stage_file" 2>/dev/null || true
         print_info "Installing latest supported $display_name... (attempt $attempt/$max_attempts)"
-        if HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install --cask "$token"; then
+        if HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install --cask "$token" >/dev/null 2>&1; then
             break
         fi
 

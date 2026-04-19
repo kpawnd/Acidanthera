@@ -6,14 +6,6 @@ get_azure_data_studio_supported_version() {
     local supported_ver="unknown"
     local download_url=""
 
-    if brew_is_healthy; then
-        supported_ver="$(get_brew_cask_version "azure-data-studio")"
-        if [[ -n "$supported_ver" && "$supported_ver" != "unknown" ]]; then
-            echo "$supported_ver"
-            return 0
-        fi
-    fi
-
     download_url="$(resolve_azure_data_studio_url)"
     supported_ver="$(extract_version_from_url "$download_url")"
     echo "$supported_ver"
@@ -260,6 +252,10 @@ install_packet_tracer() {
     local installed_app
     local supported_ver="unknown"
     local stage_file="${1:-}"
+    # Initialize stage file
+    if [[ -n "$stage_file" ]]; then
+        echo "Checking app" > "$stage_file"
+    fi
 
     print_info "Installing Cisco Packet Tracer..."
 
@@ -387,13 +383,19 @@ install_packet_tracer() {
 }
 
 get_android_studio_dmg_url() {
+    local explicit_url="${ANDROID_STUDIO_DMG_URL:-}"
     local json=""
     local dmg_url=""
-    
+
+    if [[ -n "$explicit_url" ]]; then
+        echo "$explicit_url"
+        return 0
+    fi
+
     # Ensure PY_LIB_DIR is set (for subshell execution)
     local py_lib="${PY_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/py}"
-    
-    # Try GitHub releases first
+
+    # GitHub release is the only default source for Android Studio.
     if command -v python3 >/dev/null 2>&1; then
         json="$(curl -fsSL \
             -H 'Accept: application/vnd.github+json' \
@@ -407,21 +409,8 @@ get_android_studio_dmg_url() {
             fi
         fi
     fi
-    
-    # Fall back to Homebrew's CDN
-    if brew_is_healthy && command -v python3 >/dev/null 2>&1; then
-        json="$(brew_cmd info --cask --json=v2 android-studio 2>/dev/null || true)"
-        if [[ -n "$json" ]]; then
-            dmg_url="$(echo "$json" | python3 "$py_lib/brew_utils.py" cask-url 2>/dev/null)"
-            if [[ -n "$dmg_url" && "$dmg_url" != "" ]]; then
-                echo "$dmg_url"
-                return 0
-            fi
-        fi
-    fi
-    
-    # Final fallback to Google's CDN
-    echo "https://edgedl.me.gvt1.com/android/studio/install/2025.3.3.7/android-studio-panda3-patch1-mac.dmg"
+
+    return 1
 }
 
 install_android_studio_direct_dmg() {
@@ -433,11 +422,7 @@ install_android_studio_direct_dmg() {
     local stage_file="$2"
     local file_size
 
-    if [[ "$dmg_url" == *edgedl.me* ]]; then
-        print_info "Downloading Android Studio from Google CDN..."
-    else
-        print_info "Downloading Android Studio..."
-    fi
+    print_info "Downloading Android Studio from release..."
     
     rm -f "$dmg_file" >/dev/null 2>&1 || true
     
@@ -500,7 +485,7 @@ install_android_studio_direct_dmg() {
     rm -f "$dmg_file" >/dev/null 2>&1 || true
 
     if [[ -d "$target_app" ]]; then
-        print_ok "Android Studio installed from CDN."
+        print_ok "Android Studio installed from release."
         return 0
     fi
 
@@ -511,27 +496,37 @@ install_android_studio_direct_dmg() {
 install_android_studio_with_fallback() {
     local app_path="/Applications/Android Studio.app"
     local stage_file="$1"
+    local dmg_url=""
+    local supported_ver="unknown"
 
-    print_info "Attempting Android Studio installation via Homebrew..."
-
-    # Early exit: if already installed with acceptable version, skip everything
-    if [[ -d "$app_path" ]]; then
-        local installed_ver="$(get_app_version "$app_path")"
-        if [[ -n "$installed_ver" && "$installed_ver" != "unknown" ]]; then
-            echo "Verified installation" > "$stage_file" 2>/dev/null || true
-            print_ok "Android Studio already installed: $installed_ver. Skipping reinstall."
-            return 0
-        fi
+    # Initialize stage file
+    if [[ -n "$stage_file" ]]; then
+        echo "Checking app" > "$stage_file"
     fi
 
-    # Not installed or version unknown - try Homebrew
-    echo "Installing via Homebrew" > "$stage_file" 2>/dev/null || true
-    if reinstall_cask_app "android-studio" "$app_path" "Android Studio" "$stage_file"; then
+    print_info "Installing Android Studio from release..."
+
+    echo "Resolving release URL" > "$stage_file" 2>/dev/null || true
+    dmg_url="$(get_android_studio_dmg_url)"
+    if [[ -z "$dmg_url" ]]; then
+        print_warn "Could not resolve Android Studio DMG URL from release tag 'Android'."
+        print_warn "Set ANDROID_STUDIO_DMG_URL to override with an explicit URL."
+        return 1
+    fi
+
+    supported_ver="$(extract_version_from_url "$dmg_url")"
+
+    if should_skip_direct_install "$app_path" "Android Studio" "$supported_ver"; then
+        echo "Already installed - skipping" > "$stage_file" 2>/dev/null || true
         return 0
     fi
 
-    # If we reach here, Homebrew failed - do NOT fall back to CDN
-    print_warn "Android Studio installation via Homebrew failed. Please ensure Homebrew is working correctly."
+    echo "Installing from release" > "$stage_file" 2>/dev/null || true
+    if install_android_studio_direct_dmg "$dmg_url" "$stage_file"; then
+        return 0
+    fi
+
+    print_warn "Android Studio installation from release failed."
     return 1
 }
 
@@ -568,49 +563,4 @@ install_required_software() {
     fi
 
     return 0
-}
-
-# Background wrapper for app installation with spinner
-install_app_bg() {
-    local app_name="$1"
-    local install_method="$2"
-    local cask_token="$3"
-    local app_path="$4"
-    local stage_file="/tmp/install_stage_${app_name// /_}.txt"
-    
-    (
-        install_app "$app_name" "$install_method" "$cask_token" "$app_path" "$stage_file"
-    ) &
-    
-    spinner_wait_with_stages $! "Installing $app_name" "$stage_file" || return 1
-    clear_inline_status
-    return 0
-}
-
-# Unified install function for all applications (runs in foreground, called from background wrapper)
-install_app() {
-    local app_name="$1"
-    local install_method="$2"
-    local cask_token="$3"
-    local app_path="$4"
-    local stage_file="$5"
-    
-    case "$install_method" in
-        homebrew)
-            reinstall_cask_app "$cask_token" "$app_path" "$app_name" "$stage_file"
-            ;;
-        android-fallback)
-            install_android_studio_with_fallback "$stage_file"
-            ;;
-        azure-direct)
-            install_azure_data_studio_direct "$stage_file"
-            ;;
-        packet-tracer)
-            install_packet_tracer "$stage_file"
-            ;;
-        *)
-            print_warn "Unknown install method: $install_method"
-            return 1
-            ;;
-    esac
 }
