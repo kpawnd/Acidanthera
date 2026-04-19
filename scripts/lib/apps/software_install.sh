@@ -387,6 +387,9 @@ install_android_studio_direct() {
 resolve_azure_data_studio_url() {
     local explicit_url="${AZURE_DATA_STUDIO_URL:-}"
     local api_url="https://api.github.com/repos/microsoft/azuredatastudio/releases/latest"
+    local releases_api_url="https://api.github.com/repos/microsoft/azuredatastudio/releases?per_page=10"
+    local cask_source=""
+    local cask_url=""
     local json=""
 
     if [[ -n "$explicit_url" ]]; then
@@ -394,7 +397,28 @@ resolve_azure_data_studio_url() {
         return 0
     fi
 
-    json="$(curl -fsSL "$api_url" 2>/dev/null || true)"
+    # Prefer the Homebrew cask URL when available, since it is already curated per macOS support.
+    if brew_is_healthy; then
+        cask_source="$(brew_cmd cat --cask azure-data-studio 2>/dev/null || true)"
+        if [[ -n "$cask_source" ]]; then
+            cask_url="$(printf '%s\n' "$cask_source" | awk -F'"' '/^[[:space:]]*url ".*\.(dmg|zip)"/ {print $2; exit}')"
+            if [[ -n "$cask_url" ]]; then
+                echo "$cask_url"
+                return 0
+            fi
+        fi
+    fi
+
+    json="$(curl -fsSL \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'User-Agent: acidanthera-installer' \
+        "$api_url" 2>/dev/null || true)"
+    if [[ -z "$json" ]]; then
+        json="$(curl -fsSL \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: acidanthera-installer' \
+            "$releases_api_url" 2>/dev/null || true)"
+    fi
     if [[ -z "$json" ]]; then
         echo ""
         return 1
@@ -411,19 +435,36 @@ except Exception:
     print("")
     raise SystemExit(0)
 
-assets = data.get("assets", [])
-urls = [a.get("browser_download_url", "") for a in assets]
+def collect_urls(release_obj):
+    assets = release_obj.get("assets", [])
+    return [a.get("browser_download_url", "") for a in assets]
 
-preferred = [u for u in urls if "mac" in u.lower() and u.lower().endswith(".dmg")]
+urls = []
+if isinstance(data, dict):
+    urls.extend(collect_urls(data))
+elif isinstance(data, list):
+    for rel in data:
+        if not isinstance(rel, dict):
+            continue
+        urls.extend(collect_urls(rel))
+
+urls = [u for u in urls if u]
+
+# Prefer direct DMG/ZIP assets that include mac markers.
+preferred = [
+    u for u in urls
+    if "mac" in u.lower() and (u.lower().endswith(".dmg") or u.lower().endswith(".zip"))
+]
 if preferred:
     print(preferred[0])
     raise SystemExit(0)
 
-zip_assets = [u for u in urls if "mac" in u.lower() and u.lower().endswith(".zip")]
-if zip_assets:
-    print(zip_assets[0])
-else:
-    print("")
+generic = [u for u in urls if u.lower().endswith(".dmg") or u.lower().endswith(".zip")]
+if generic:
+    print(generic[0])
+    raise SystemExit(0)
+
+print("")
 PY
         return 0
     fi
@@ -618,8 +659,15 @@ install_packet_tracer() {
 
     print_info "Using Packet Tracer DMG URL: $dmg_url"
 
-    if ! download_file_optimized "$dmg_url" "$dmg_file"; then
+    rm -f "$dmg_file" >/dev/null 2>&1 || true
+    if ! download_file_resilient "$dmg_url" "$dmg_file"; then
         print_warn "Failed to download Cisco Packet Tracer DMG."
+        return 1
+    fi
+
+    if ! hdiutil verify "$dmg_file" >/dev/null 2>&1; then
+        print_warn "Downloaded Cisco Packet Tracer DMG failed integrity verification."
+        rm -f "$dmg_file" >/dev/null 2>&1 || true
         return 1
     fi
 
@@ -627,10 +675,18 @@ install_packet_tracer() {
     mkdir -p "$mount_point" || return 1
 
     print_info "Mounting DMG..."
-    if ! hdiutil attach "$dmg_file" -quiet -nobrowse -mountpoint "$mount_point" >/dev/null 2>&1; then
-        print_warn "Failed to mount Cisco Packet Tracer DMG."
-        rm -f "$dmg_file" >/dev/null 2>&1 || true
-        return 1
+    if ! hdiutil attach "$dmg_file" -quiet -nobrowse -readonly -mountpoint "$mount_point" >/dev/null 2>&1; then
+        local attach_output=""
+        local detected_mount=""
+        attach_output="$(hdiutil attach "$dmg_file" -nobrowse -readonly 2>/dev/null || true)"
+        detected_mount="$(printf '%s\n' "$attach_output" | awk -F'\t' '/\/Volumes\// {print $3}' | tail -n 1)"
+        if [[ -n "$detected_mount" && -d "$detected_mount" ]]; then
+            mount_point="$detected_mount"
+        else
+            print_warn "Failed to mount Cisco Packet Tracer DMG."
+            rm -f "$dmg_file" >/dev/null 2>&1 || true
+            return 1
+        fi
     fi
 
     pkg_path="$(find "$mount_point" -maxdepth 5 -name '*.pkg' | head -n 1)"
