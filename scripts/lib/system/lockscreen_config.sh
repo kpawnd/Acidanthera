@@ -25,7 +25,6 @@ apply_lockscreen_cache_for_user() {
     local image_path="$2"
     local generated_uid
     local cache_dir
-    local wrote=false
 
     generated_uid="$(dscl . -read "/Users/$target_user" GeneratedUID 2>/dev/null | awk '{print $2}')"
     if [[ -z "$generated_uid" ]]; then
@@ -33,22 +32,17 @@ apply_lockscreen_cache_for_user() {
     fi
 
     cache_dir="/Library/Caches/Desktop Pictures/$generated_uid"
-    if sudo mkdir -p "$cache_dir"; then
-        if sudo cp "$image_path" "$cache_dir/lockscreen.png"; then
-            wrote=true
-        fi
-        # Some versions read JPG in this cache path.
-        sudo cp "$image_path" "$cache_dir/lockscreen.jpg" >/dev/null 2>&1 || true
-        sudo chmod 644 "$cache_dir/lockscreen.png" "$cache_dir/lockscreen.jpg" >/dev/null 2>&1 || true
-        sudo chown root:wheel "$cache_dir/lockscreen.png" "$cache_dir/lockscreen.jpg" >/dev/null 2>&1 || true
+    if ! sudo mkdir -p "$cache_dir"; then
+        return 1
     fi
 
-    # Compatibility path used by some loginwindow flows.
-    sudo cp "$image_path" /Library/Caches/com.apple.desktop.admin.png >/dev/null 2>&1 || true
-    sudo chmod 644 /Library/Caches/com.apple.desktop.admin.png >/dev/null 2>&1 || true
-    sudo chown root:wheel /Library/Caches/com.apple.desktop.admin.png >/dev/null 2>&1 || true
+    # Write both png/jpg variants used by different macOS builds.
+    sudo cp "$image_path" "$cache_dir/lockscreen.png" 2>/dev/null || return 1
+    sudo cp "$image_path" "$cache_dir/lockscreen.jpg" 2>/dev/null || true
+    sudo cp "$image_path" "/Library/Caches/com.apple.desktop.admin.png" 2>/dev/null || true
+    sudo chmod 644 "$cache_dir/lockscreen.png" "$cache_dir/lockscreen.jpg" "/Library/Caches/com.apple.desktop.admin.png" >/dev/null 2>&1 || true
 
-    [[ "$wrote" == "true" ]]
+    return 0
 }
 
 configure_lockscreen_background() {
@@ -109,7 +103,7 @@ configure_lockscreen_background() {
         print_warn "Failed to set login window background via defaults"
     fi
     
-    # Apply true lockscreen cache for active user.
+    # Target user-specific lock screen cache.
     print_info "Applying lockscreen cache for active user..."
     
     local current_user
@@ -122,13 +116,15 @@ configure_lockscreen_background() {
             print_warn "Could not update lockscreen cache for $current_user"
         fi
 
-        # Optional: keep desktop wallpaper in sync when requested.
         if [[ "${LOCKSCREEN_SET_WALLPAPER:-0}" == "1" ]]; then
+            print_info "LOCKSCREEN_SET_WALLPAPER=1 set; also updating desktop wallpaper..."
             if apply_wallpaper_for_user "$current_user" "$persistent_image"; then
                 print_info "Wallpaper updated for user: $current_user"
             else
                 print_warn "Could not update wallpaper in GUI session for $current_user"
             fi
+        else
+            print_info "Desktop wallpaper unchanged (set LOCKSCREEN_SET_WALLPAPER=1 to enable)."
         fi
     fi
 
