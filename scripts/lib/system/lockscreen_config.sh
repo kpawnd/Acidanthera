@@ -2,6 +2,7 @@
 
 # Configure custom lockscreen/login window background
 # Works across macOS Monterey (12) through Sequoia (15)
+# Supports both SIP-enabled and SIP-disabled (OCLP) systems
 
 configure_lockscreen_background() {
     local image_url="${LOCKSCREEN_IMAGE_URL:-https://wall-r2.tasw.qzz.io/original_lockscreen11.png}"
@@ -23,7 +24,19 @@ configure_lockscreen_background() {
         return 1
     fi
     
-    # Set login window background (works Monterey+)
+    # Check if SIP is disabled (OCLP system)
+    local sip_enabled=true
+    if csrutil status 2>/dev/null | grep -q "disabled"; then
+        sip_enabled=false
+        print_info "SIP detected as disabled (OCLP system) - using full lockscreen replacement"
+    fi
+    
+    # For SIP-disabled systems (OCLP), replace actual lockscreen images
+    if [[ "$sip_enabled" == "false" ]]; then
+        _apply_lockscreen_sip_disabled "$image_file"
+    fi
+    
+    # Always set login window background (works with or without SIP)
     print_info "Setting login window background..."
     
     # Copy to system location
@@ -61,6 +74,64 @@ EOF
     rm -f "$image_file"
     print_ok "Lockscreen background configured"
     return 0
+}
+
+# Apply lockscreen replacement for SIP-disabled systems (OCLP)
+_apply_lockscreen_sip_disabled() {
+    local image_file="$1"
+    
+    print_info "Replacing lockscreen image (SIP disabled)..."
+    
+    # Copy to standard macOS lockscreen locations (works Monterey-Sequoia)
+    local lock_dirs=(
+        "/Library/Caches/com.apple.loginwindow"
+        "/var/db/loginwindow"
+    )
+    
+    for dir in "${lock_dirs[@]}"; do
+        if [[ -d "$dir" ]]; then
+            sudo cp "$image_file" "$dir/lockscreen.png" 2>/dev/null && \
+            sudo chmod 644 "$dir/lockscreen.png" 2>/dev/null || true
+        fi
+    done
+    
+    # Set system-wide lockscreen via com.apple.loginwindow defaults
+    sudo defaults write /Library/Preferences/com.apple.loginwindow \
+        "DesktopPicture" "$image_file" 2>/dev/null || true
+    
+    # Set for macOS login/lock screen (Monterey+)
+    sudo defaults write /Library/Preferences/com.apple.loginwindow \
+        "LockScreenImage" "$image_file" 2>/dev/null || true
+    
+    # Create lock screen LaunchAgent to persist across updates
+    local launchagent_dir="$HOME/Library/LaunchAgents"
+    local launchagent_file="$launchagent_dir/com.lab.lockscreen.plist"
+    
+    mkdir -p "$launchagent_dir"
+    
+    cat > "$launchagent_file" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.lab.lockscreen</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>defaults write /Library/Preferences/com.apple.loginwindow DesktopPicture "$LOCKSCREEN_IMAGE_PATH" 2>/dev/null && killall -HUP loginwindow 2>/dev/null || true</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+</dict>
+</plist>
+EOF
+    
+    launchctl load "$launchagent_file" 2>/dev/null || true
+    print_ok "Lockscreen replacement applied (SIP disabled)"
 }
 
 # MDM profile approach for persistent cross-version lockscreen
