@@ -4,6 +4,22 @@
 # Works across macOS Monterey (12) through Sequoia (15)
 # Supports both SIP-enabled and SIP-disabled (OCLP) systems
 
+apply_wallpaper_for_user() {
+    local target_user="$1"
+    local image_path="$2"
+    local target_uid
+
+    target_uid="$(id -u "$target_user" 2>/dev/null || true)"
+    if [[ -z "$target_uid" ]]; then
+        return 1
+    fi
+
+    launchctl asuser "$target_uid" sudo -u "$target_user" osascript \
+        -e 'tell application "System Events"' \
+        -e 'tell every desktop to set picture to POSIX file "'"$image_path"'"' \
+        -e 'end tell' >/dev/null 2>&1
+}
+
 configure_lockscreen_background() {
     local image_url="${LOCKSCREEN_IMAGE_URL:-https://wall.tasw.qzz.io/mac.png}"
     local image_file="/tmp/lockscreen_bg.png"
@@ -69,13 +85,12 @@ configure_lockscreen_background() {
     current_user="$(stat -f%Su /dev/console 2>/dev/null || whoami)"
     
     if [[ -n "$current_user" && "$current_user" != "root" ]]; then
-        # Set desktop background for current user
-        osascript <<EOF 2>/dev/null || true
-tell application "System Events"
-    set theDesktop to the desktop
-    set the picture of theDesktop to "$persistent_image"
-end tell
-EOF
+        # Set wallpaper in the user's GUI session so lock screen (user context) picks it up.
+        if apply_wallpaper_for_user "$current_user" "$persistent_image"; then
+            print_info "Wallpaper updated for user: $current_user"
+        else
+            print_warn "Could not update wallpaper in GUI session for $current_user"
+        fi
     fi
 
     rm -f "$image_file"
