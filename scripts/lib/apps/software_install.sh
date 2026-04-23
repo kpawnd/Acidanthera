@@ -450,6 +450,114 @@ install_android_studio_homebrew() {
     install_cask_homebrew_only "android-studio" "/Applications/Android Studio.app" "Android Studio" "$stage_file"
 }
 
+install_blender_direct_download() {
+    local stage_file="${1:-}"
+    local dmg_url="${BLENDER_DMG_URL:-https://download.blender.org/release/Blender3.6/blender-3.6.23-macos-x64.dmg}"
+    local supported_ver="${BLENDER_VERSION:-3.6.23}"
+    local app_path="/Applications/Blender.app"
+    local dmg_file="/tmp/blender-3.6.23.dmg"
+    local mount_point="/tmp/blender_mount"
+    local remote_size="0"
+    local monitor_pid=""
+    local attach_output=""
+    local detected_mount=""
+    local app_in_dmg=""
+    local installed_path=""
+
+    if [[ -n "$stage_file" ]]; then
+        echo "Checking app" > "$stage_file"
+    fi
+
+    print_info "Installing Blender..."
+
+    installed_path="$(resolve_installed_app_path "$app_path")"
+    if [[ -n "$installed_path" ]]; then
+        if should_skip_direct_install "$installed_path" "Blender" "$supported_ver"; then
+            return 0
+        fi
+    fi
+
+    rm -f "$dmg_file" >/dev/null 2>&1 || true
+    rm -rf "$mount_point" >/dev/null 2>&1 || true
+
+    echo "Resolving download URL" > "$stage_file" 2>/dev/null || true
+    remote_size="$(get_remote_file_size "$dmg_url" || echo 0)"
+
+    echo "Downloading Blender" > "$stage_file" 2>/dev/null || true
+    monitor_download_progress "$dmg_file" "$stage_file" "Blender" "$remote_size" &
+    monitor_pid=$!
+    if ! download_file_resilient "$dmg_url" "$dmg_file"; then
+        kill "$monitor_pid" >/dev/null 2>&1 || true
+        wait "$monitor_pid" >/dev/null 2>&1 || true
+        print_warn "Failed to download Blender DMG."
+        return 1
+    fi
+    kill "$monitor_pid" >/dev/null 2>&1 || true
+    wait "$monitor_pid" >/dev/null 2>&1 || true
+
+    echo "Verifying download" > "$stage_file" 2>/dev/null || true
+    if ! hdiutil verify "$dmg_file" >/dev/null 2>&1; then
+        print_warn "Downloaded Blender DMG failed integrity verification."
+        rm -f "$dmg_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    mkdir -p "$mount_point" || return 1
+    echo "Mounting DMG" > "$stage_file" 2>/dev/null || true
+    if ! hdiutil attach "$dmg_file" -quiet -nobrowse -readonly -mountpoint "$mount_point" >/dev/null 2>&1; then
+        attach_output="$(hdiutil attach "$dmg_file" -nobrowse -readonly 2>/dev/null || true)"
+        detected_mount="$(printf '%s\n' "$attach_output" | awk -F'\t' '/\/Volumes\// {print $3}' | tail -n 1)"
+        if [[ -n "$detected_mount" && -d "$detected_mount" ]]; then
+            mount_point="$detected_mount"
+        else
+            print_warn "Failed to mount Blender DMG."
+            rm -f "$dmg_file" >/dev/null 2>&1 || true
+            return 1
+        fi
+    fi
+
+    echo "Locating app bundle" > "$stage_file" 2>/dev/null || true
+    app_in_dmg="$(find "$mount_point" -maxdepth 3 -type d -name 'Blender.app' | head -n 1)"
+    if [[ -z "$app_in_dmg" ]]; then
+        print_warn "Blender.app not found inside DMG."
+        hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+        rm -f "$dmg_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    echo "Copying app bundle to /Applications" > "$stage_file" 2>/dev/null || true
+    if [[ -n "$installed_path" && -d "$installed_path" ]]; then
+        sudo -n rm -rf "$installed_path" >/dev/null 2>&1 || sudo rm -rf "$installed_path" >/dev/null 2>&1 || true
+    fi
+    if [[ -d "$app_path" ]]; then
+        sudo -n rm -rf "$app_path" >/dev/null 2>&1 || sudo rm -rf "$app_path" >/dev/null 2>&1 || true
+    fi
+    if ! sudo -n ditto "$app_in_dmg" "$app_path" >/dev/null 2>&1; then
+        if ! sudo ditto "$app_in_dmg" "$app_path" >/dev/null 2>&1; then
+            print_warn "Blender app copy failed."
+            hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+            rm -f "$dmg_file" >/dev/null 2>&1 || true
+            return 1
+        fi
+    fi
+
+    echo "Verifying installation" > "$stage_file" 2>/dev/null || true
+    installed_path="$(resolve_installed_app_path "$app_path")"
+    if [[ -z "$installed_path" ]]; then
+        print_warn "Blender install command completed but app was not found."
+        hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+        rm -f "$dmg_file" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    echo "Cleaning up" > "$stage_file" 2>/dev/null || true
+    hdiutil detach "$mount_point" -force >/dev/null 2>&1 || true
+    rm -f "$dmg_file" >/dev/null 2>&1 || true
+
+    print_ok "Blender installed. Version: $(get_app_version "$installed_path")"
+    return 0
+}
+
 install_required_software() {
     local had_error=0
     local stage_blender="/tmp/install_stage_blender.txt"
@@ -460,7 +568,7 @@ install_required_software() {
     print_info "Installing required software set..."
     repair_homebrew_environment || true
 
-    reinstall_cask_app "blender" "/Applications/Blender.app" "Blender" "$stage_blender" &
+    install_blender_direct_download "$stage_blender" &
     spinner_wait_with_stages $! "Installing Blender" "$stage_blender" || had_error=1
 
     install_android_studio_homebrew "$stage_android" &

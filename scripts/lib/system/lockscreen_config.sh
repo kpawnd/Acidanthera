@@ -2,8 +2,6 @@
 
 # Best-effort lock screen/login window background customization
 # Works across macOS Monterey (12) through Sequoia (15)
-# Supports both SIP-enabled and SIP-disabled (OCLP) systems
-# Note: macOS does not expose a stable, separate lock-screen image API.
 
 apply_wallpaper_for_user() {
     local target_user="$1"
