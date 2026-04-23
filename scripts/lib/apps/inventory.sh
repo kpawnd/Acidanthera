@@ -5,15 +5,23 @@ get_app_version() {
     local plist="$app_path/Contents/Info.plist"
     local version=""
 
-    if [[ ! -f "$plist" ]]; then
-        echo "unknown"
-        return 0
+    if [[ -f "$plist" ]]; then
+        version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null || true)"
+        if [[ -z "$version" ]]; then
+            version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null || true)"
+        fi
     fi
 
-    version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null || true)"
     if [[ -z "$version" ]]; then
-        version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist" 2>/dev/null || true)"
+        # Fallback: extract dotted version from the app bundle name (e.g. "Cisco Packet Tracer 9.0.app" → "9.0")
+        version="$(basename "$app_path" .app | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)*' | head -n 1 || true)"
     fi
+
+    if [[ -z "$version" ]]; then
+        # Fallback: extract dotted version from parent directory name (e.g. "Cisco Packet Tracer 9.0.0" → "9.0.0")
+        version="$(basename "$(dirname "$app_path")" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)*' | head -n 1 || true)"
+    fi
+
     if [[ -z "$version" ]]; then
         version="unknown"
     fi

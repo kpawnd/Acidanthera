@@ -323,9 +323,16 @@ find_installed_packet_tracer_app() {
         return 0
     done < <(find /Applications -maxdepth 2 -type d \( -name 'Packet Tracer.app' -o -name 'PacketTracer.app' -o -name 'Cisco Packet Tracer.app' -o -name 'Cisco Packet Tracer*.app' \) 2>/dev/null)
 
-    # Some releases install as versioned directories without .app bundle at root.
+    # Some releases install into a versioned wrapper directory (e.g. /Applications/Cisco Packet Tracer 9.0.0/).
+    # Prefer returning the nested .app bundle so get_app_version can read Info.plist.
     while IFS= read -r candidate; do
         [[ -z "$candidate" ]] && continue
+        local nested_app
+        nested_app="$(find "$candidate" -maxdepth 2 -type d -name '*.app' 2>/dev/null | grep -v '/Contents/' | head -n 1)"
+        if [[ -n "$nested_app" ]] && ! is_packet_tracer_installer_bundle "$nested_app"; then
+            echo "$nested_app"
+            return 0
+        fi
         if [[ -x "$candidate/bin/PacketTracer" || -x "$candidate/PacketTracer" ]]; then
             echo "$candidate"
             return 0
@@ -417,7 +424,11 @@ run_packet_tracer_installer_unattended() {
 # Resolve Homebrew cask download locks
 resolve_brew_download_locks_for_token() {
     local token="$1"
-    local lock_dir="${HOME}/Library/Caches/Homebrew/downloads"
+    local brew_home="${HOME}"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        brew_home="$(eval echo "~${SUDO_USER}" 2>/dev/null || echo "/Users/${SUDO_USER}")"
+    fi
+    local lock_dir="${brew_home}/Library/Caches/Homebrew/downloads"
     local lockfile
     local holders
     local elapsed
@@ -467,7 +478,11 @@ resolve_brew_download_locks_for_token() {
 record_cask_lock() {
     local token="$1"
     local app_path="$2"
-    local lock_dir="$HOME/.labstate/cask-locks"
+    local state_home="${HOME}"
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        state_home="$(eval echo "~${SUDO_USER}" 2>/dev/null || echo "/Users/${SUDO_USER}")"
+    fi
+    local lock_dir="${state_home}/.labstate/cask-locks"
     local lock_file="$lock_dir/$token.lock"
     local macos_ver
     local installed_ver

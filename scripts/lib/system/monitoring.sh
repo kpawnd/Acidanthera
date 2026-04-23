@@ -78,7 +78,7 @@ get_memory_stats() {
     local pagesize
     
     vm_output=$(vm_stat)
-    pagesize=$(vm_output | grep -i 'page size' | awk '{print $NF}')
+    pagesize=$(echo "$vm_output" | grep -i 'page size' | awk '{print $NF}')
     [[ -z "$pagesize" ]] && pagesize=4096
     
     pages_free=$(echo "$vm_output" | grep 'Pages free' | awk '{print $NF}' | tr -d '.')
@@ -111,7 +111,6 @@ print_once() {
     printf "${CYAN}║${NC}\n"
     
     printf "${CYAN}║ Disk (/)${NC}\n"
-    df -h / 2>/dev/null | tail -1 | awk '{printf "║   Used: %s | Available: %s | Capacity: %s\n", $3, $4, $5}' | sed 's/^/║   /' | head -1
     df -h / 2>/dev/null | tail -1 | awk '{print $3, $4, $5}' | (read used avail cap; printf "${CYAN}║${NC}   Used: ${YELLOW}%s${NC} | Available: ${GREEN}%s${NC} | Capacity: ${YELLOW}%s${NC}\n" "$used" "$avail" "$cap")
     printf "${CYAN}║${NC}\n"
     

@@ -345,7 +345,14 @@ brew_cmd() {
     fi
 
     if [[ "$EUID" -eq 0 ]] && [[ -n "${SUDO_USER:-}" ]]; then
-        sudo -u "$SUDO_USER" "$brew_bin" "$@"
+        local target_home
+        target_home="$(eval echo "~${SUDO_USER}" 2>/dev/null || echo "/Users/${SUDO_USER}")"
+        sudo -u "$SUDO_USER" \
+            env \
+            HOME="$target_home" \
+            HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-}" \
+            HOMEBREW_NO_INSTALL_FROM_API="${HOMEBREW_NO_INSTALL_FROM_API:-}" \
+            "$brew_bin" "$@"
     else
         "$brew_bin" "$@"
     fi
@@ -575,18 +582,23 @@ ensure_runtime_dependencies() {
         fi
     fi
 
-    # Install monitoring stack used by sysmon wrapper.
+    # Install monitoring stack used by sysmon wrapper (optional — failures are non-fatal).
     if brew_is_healthy; then
         if ! brew_cmd list --formula btop >/dev/null 2>&1; then
             print_info "Installing monitoring dependency: btop"
             network_stage_update "btop" "--" "estimating" "phase=brew-install"
-            HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install btop >/dev/null 2>&1 || had_error=1
+            HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install btop >/dev/null 2>&1 || \
+                print_warn "btop install failed; sysmon will fall back to built-in monitor"
         fi
 
-        if ! brew_cmd list --formula osx-cpu-temp >/dev/null 2>&1; then
-            print_info "Installing monitoring dependency: osx-cpu-temp"
-            network_stage_update "osx-cpu-temp" "--" "estimating" "phase=brew-install"
-            HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install osx-cpu-temp >/dev/null 2>&1 || had_error=1
+        # osx-cpu-temp uses the Intel SMC interface — not available on Apple Silicon.
+        if [[ "$(uname -m)" != "arm64" ]]; then
+            if ! brew_cmd list --formula osx-cpu-temp >/dev/null 2>&1; then
+                print_info "Installing monitoring dependency: osx-cpu-temp"
+                network_stage_update "osx-cpu-temp" "--" "estimating" "phase=brew-install"
+                HOMEBREW_NO_AUTO_UPDATE=1 brew_cmd install osx-cpu-temp >/dev/null 2>&1 || \
+                    print_warn "osx-cpu-temp install failed; CPU temp will use powermetrics fallback"
+            fi
         fi
     else
         print_warn "Homebrew unavailable, skipping btop/osx-cpu-temp install."
