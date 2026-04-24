@@ -18,16 +18,20 @@ GitHub serves the entire repo as a tarball at that URL, so all scripts are prese
 
 ## Wallpaper / lock screen only
 
-Run this from inside the cloned repo to set the lock screen and desktop wallpaper without running the full script.
+**Without git** (recommended — works anywhere):
+```shell
+curl -fsSL https://github.com/kpawnd/Atherion/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && sudo bash -c 'source /tmp/Atherion-main/scripts/lib/core/ui.sh && source /tmp/Atherion-main/scripts/lib/system/lockscreen_config.sh && configure_lockscreen_background'
+```
 
+**From inside the cloned repo:**
 ```shell
 sudo bash -c 'source scripts/lib/core/ui.sh && source scripts/lib/system/lockscreen_config.sh && configure_lockscreen_background'
 ```
 
-To use a custom image URL:
+To use a custom image URL, prepend `LOCKSCREEN_IMAGE_URL="https://…"` to either command:
 
 ```shell
-sudo bash -c 'LOCKSCREEN_IMAGE_URL="https://example.com/your-image.png" source scripts/lib/core/ui.sh && source scripts/lib/system/lockscreen_config.sh && configure_lockscreen_background'
+curl -fsSL https://github.com/kpawnd/Atherion/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && sudo bash -c 'LOCKSCREEN_IMAGE_URL="https://example.com/your-image.png" source /tmp/Atherion-main/scripts/lib/core/ui.sh && source /tmp/Atherion-main/scripts/lib/system/lockscreen_config.sh && configure_lockscreen_background'
 ```
 
 Changes take effect on the next lock screen or reboot — no logout required.
