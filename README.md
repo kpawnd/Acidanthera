@@ -4,9 +4,17 @@ macOS lab setup automation for Intel iMacs running Ventura and later.
 
 ## Full setup
 
+**With git:**
 ```shell
 git clone https://github.com/kpawnd/Atherion.git && cd Atherion && sudo bash main.sh
 ```
+
+**Without git** (GitHub tarball — no git required):
+```shell
+curl -fsSL https://github.com/kpawnd/Atherion/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && sudo bash /tmp/Atherion-main/main.sh
+```
+
+GitHub serves the entire repo as a tarball at that URL, so all scripts are present on disk and the relative `source` calls inside `main.sh` resolve correctly.
 
 ## Wallpaper / lock screen only
 
