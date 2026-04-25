@@ -22,11 +22,33 @@ apply_wallpaper_for_user() {
         return $?
     fi
 
-    # User is not currently logged in — write the preference directly so it
-    # applies when they next log in (Ventura-compatible legacy domain).
-    sudo -u "$target_user" defaults write com.apple.desktop Background \
-        -dict default -dict ImageFilePath "$image_path" Change Never \
-        >/dev/null 2>&1
+    # User is not currently logged in.
+    # Resolve home directory from the directory service — eval/~ is unreliable as root.
+    local user_home
+    user_home="$(dscl . -read "/Users/$target_user" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+    [[ -z "$user_home" ]] && user_home="/Users/$target_user"
+    [[ -d "$user_home" ]] || return 1
+
+    local prefs_dir="${user_home}/Library/Preferences"
+    local plist="${prefs_dir}/com.apple.desktop.plist"
+
+    # Ensure the Preferences directory exists and is owned by the target user.
+    if [[ ! -d "$prefs_dir" ]]; then
+        sudo mkdir -p "$prefs_dir" >/dev/null 2>&1 && \
+            sudo chown "${target_user}" "$prefs_dir" >/dev/null 2>&1 || return 1
+    fi
+
+    # PlistBuddy handles nested dicts reliably.
+    # Delete any existing Background key first (ignore failure if not present),
+    # then rebuild the full nested structure.
+    sudo -u "$target_user" /usr/libexec/PlistBuddy \
+        -c "Delete :Background" "$plist" >/dev/null 2>&1 || true
+    sudo -u "$target_user" /usr/libexec/PlistBuddy \
+        -c "Add :Background dict" \
+        -c "Add :Background:default dict" \
+        -c "Add :Background:default:ImageFilePath string ${image_path}" \
+        -c "Add :Background:default:Change string Never" \
+        "$plist" >/dev/null 2>&1
 }
 
 disable_screensaver_for_user() {
