@@ -103,6 +103,72 @@ apply_lockscreen_cache_for_user() {
     return 0
 }
 
+install_lockscreen_boot_daemon() {
+    local image_path="$1"
+    local daemon_label="com.atherion.lockscreen"
+    local daemon_plist="/Library/LaunchDaemons/${daemon_label}.plist"
+    local support_dir="/Library/Application Support/Atherion"
+    local restore_script="${support_dir}/apply-lockscreen.sh"
+
+    sudo mkdir -p "$support_dir" >/dev/null 2>&1 || return 1
+
+    # Write the restore script with fully-qualified paths — no shell environment at boot.
+    sudo tee "$restore_script" >/dev/null <<'RESTORE_SCRIPT'
+#!/bin/bash
+IMAGE="/Library/Application Support/Atherion/lockscreen_bg.png"
+[[ -f "$IMAGE" ]] || exit 0
+
+# Restore loginwindow preferences so the custom image shows at boot.
+/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow \
+    DesktopPicture "$IMAGE"
+/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow \
+    LockScreenImage "$IMAGE"
+
+# Restore every per-user Desktop Pictures cache.
+for cache_dir in "/Library/Caches/Desktop Pictures"/*/; do
+    [[ -d "$cache_dir" ]] || continue
+    /bin/cp "$IMAGE" "${cache_dir}lockscreen.png" 2>/dev/null || true
+    /bin/cp "$IMAGE" "${cache_dir}lockscreen.jpg" 2>/dev/null || true
+    /bin/chmod 644 "${cache_dir}lockscreen.png" "${cache_dir}lockscreen.jpg" 2>/dev/null || true
+done
+
+# Restore global admin cache.
+/bin/cp "$IMAGE" "/Library/Caches/com.apple.desktop.admin.png" 2>/dev/null || true
+/bin/chmod 644 "/Library/Caches/com.apple.desktop.admin.png" 2>/dev/null || true
+RESTORE_SCRIPT
+
+    sudo chmod 755 "$restore_script" >/dev/null 2>&1 || return 1
+    sudo chown root:wheel "$restore_script" >/dev/null 2>&1 || return 1
+
+    # Write the LaunchDaemon plist (paths with spaces are safe inside array elements).
+    sudo tee "$daemon_plist" >/dev/null <<DAEMON_PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${daemon_label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Library/Application Support/Atherion/apply-lockscreen.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+DAEMON_PLIST
+
+    sudo chmod 644 "$daemon_plist" >/dev/null 2>&1 || return 1
+    sudo chown root:wheel "$daemon_plist" >/dev/null 2>&1 || return 1
+
+    # Bootstrap (or re-bootstrap) the daemon so it also runs in the current boot session.
+    sudo launchctl bootout "system/${daemon_label}" >/dev/null 2>&1 || true
+    sudo launchctl bootstrap system "$daemon_plist" >/dev/null 2>&1 || return 1
+
+    return 0
+}
+
 list_lockscreen_target_users() {
     dscl . -list /Users UniqueID 2>/dev/null | awk '$2 >= 500 && $1 != "root" && $1 != "nobody" {print $1}'
 }
@@ -322,6 +388,19 @@ configure_lockscreen_background() {
     if [[ "${LOCKSCREEN_SET_WALLPAPER:-1}" != "1" ]]; then
         print_info "Desktop wallpaper unchanged (LOCKSCREEN_SET_WALLPAPER=0)."
         echo "Desktop wallpaper skipped by LOCKSCREEN_SET_WALLPAPER=0" >> "$diag_log" 2>/dev/null || true
+    fi
+
+    # Install a LaunchDaemon that re-applies the image on every boot.
+    # macOS regenerates the loginwindow boot background from session state on logout/shutdown,
+    # overwriting what the script set. The daemon restores our image early in the boot sequence
+    # before loginwindow finishes rendering.
+    print_info "Installing boot-time lockscreen restore daemon..."
+    if install_lockscreen_boot_daemon "$persistent_image"; then
+        total_checks=$((total_checks + 1))
+        print_ok "Check $total_checks: boot-time restore daemon installed (com.atherion.lockscreen)"
+    else
+        print_warn "Could not install boot-time restore daemon; lockscreen may reset after reboot"
+        failed_checks=$((failed_checks + 1))
     fi
 
     rm -f "$image_file"
