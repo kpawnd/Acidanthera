@@ -482,9 +482,11 @@ repair_homebrew_permissions() {
             }
         fi
 
-        if [[ ! -w "$d" ]]; then
+        # Check writability as the target user, not as root — root can always write,
+        # so [[ ! -w "$d" ]] would never fire when running via sudo.
+        if ! sudo -u "$owner_user" test -w "$d" 2>/dev/null; then
             print_info "Fixing write permissions for: $d"
-            sudo chown -R "$owner_user":"$owner_group" "$d" >/dev/null 2>&1 || {
+            sudo chown "$owner_user":"$owner_group" "$d" >/dev/null 2>&1 || {
                 print_warn "Could not change ownership for: $d"
                 had_error=1
             }
