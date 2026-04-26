@@ -109,127 +109,110 @@ apply_lockscreen_cache_for_user() {
     return 0
 }
 
-install_lockscreen_boot_daemon() {
-    local image_path="$1"
+remove_legacy_lockscreen_daemon() {
+    # The com.atherion.lockscreen LaunchDaemon was a dead end:
+    #   - RunAtLoad fires AFTER loginwindow has already rendered the boot screen
+    #   - The plist keys it wrote (com.apple.loginwindow DesktopPicture /
+    #     LockScreenImage) are pre-Big-Sur-era and not honored at cold boot on
+    #     Sequoia. /private/var/db/loginwindow paths are no longer authoritative.
+    # Tear it down on any machine that still has it installed.
     local daemon_label="com.atherion.lockscreen"
     local daemon_plist="/Library/LaunchDaemons/${daemon_label}.plist"
-    local support_dir="/Library/Application Support/Atherion"
-    local restore_script="${support_dir}/apply-lockscreen.sh"
+    local restore_script="/Library/Application Support/Atherion/apply-lockscreen.sh"
+    local boot_log="/var/log/atherion-lockscreen-boot.log"
 
-    sudo mkdir -p "$support_dir" >/dev/null 2>&1 || return 1
-
-    # Write the restore script with fully-qualified paths — no shell environment at boot.
-    sudo tee "$restore_script" >/dev/null <<'RESTORE_SCRIPT'
-#!/bin/bash
-IMAGE="/Library/Application Support/Atherion/lockscreen_bg.png"
-LOG="/var/log/atherion-lockscreen-boot.log"
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null || true; }
-
-[[ -f "$IMAGE" ]] || { log "Image missing: $IMAGE"; exit 0; }
-log "apply-lockscreen starting (macOS $(/usr/bin/sw_vers -productVersion 2>/dev/null))"
-
-# Write loginwindow background to every plist path macOS may consult.
-# On Sequoia (15+) loginwindow may read its own user-data directory at
-# /private/var/db/loginwindow rather than the system /Library/Preferences path.
-# PlistBuddy writes directly to the file, bypassing cfprefsd's write cache so
-# the value is on disk before loginwindow reads it — defaults write goes through
-# cfprefsd which may not flush in time on fast-boot Sequoia.
-_plist_set() {
-    local plist="$1" key="$2" value="$3"
-    local dir
-    dir="$(/usr/bin/dirname "$plist")"
-    [[ -d "$dir" ]] || /bin/mkdir -p "$dir" 2>/dev/null || return 1
-    /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "$plist" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Add :${key} string ${value}" "$plist" 2>/dev/null \
-        || /usr/bin/defaults write "${plist%.plist}" "$key" "$value" 2>/dev/null
-}
-
-for plist in \
-    "/Library/Preferences/com.apple.loginwindow.plist" \
-    "/private/var/db/loginwindow/Library/Preferences/com.apple.loginwindow.plist"; do
-    for key in DesktopPicture LockScreenImage; do
-        if _plist_set "$plist" "$key" "$IMAGE"; then
-            log "Set $key → $plist"
-        else
-            log "FAILED to set $key → $plist"
-        fi
-    done
-done
-
-# Also try the system-level com.apple.desktop plist — loginwindow on some
-# Sequoia builds reads the system Background preference from here rather than
-# the loginwindow-specific plist.
-_plist_set_nested() {
-    local plist="$1" value="$2"
-    local dir
-    dir="$(/usr/bin/dirname "$plist")"
-    [[ -d "$dir" ]] || /bin/mkdir -p "$dir" 2>/dev/null || return 1
-    /usr/libexec/PlistBuddy \
-        -c "Set :Background:default:ImageFilePath ${value}" "$plist" 2>/dev/null \
-    || /usr/libexec/PlistBuddy \
-        -c "Add :Background dict" \
-        -c "Add :Background:default dict" \
-        -c "Add :Background:default:ImageFilePath string ${value}" \
-        -c "Add :Background:default:Change string Never" \
-        "$plist" 2>/dev/null
-}
-if _plist_set_nested "/Library/Preferences/com.apple.desktop.plist" "$IMAGE"; then
-    log "Set Background:default:ImageFilePath → com.apple.desktop.plist"
-else
-    log "FAILED to set com.apple.desktop.plist (may already be correct or unsupported)"
-fi
-
-# Per-user Desktop Pictures cache (per-user lock screen and switch-user panel).
-for cache_dir in "/Library/Caches/Desktop Pictures"/*/; do
-    [[ -d "$cache_dir" ]] || continue
-    /bin/cp "$IMAGE" "${cache_dir}lockscreen.png" 2>/dev/null || true
-    /bin/cp "$IMAGE" "${cache_dir}lockscreen.jpg" 2>/dev/null || true
-    /bin/chmod 644 "${cache_dir}lockscreen.png" "${cache_dir}lockscreen.jpg" 2>/dev/null || true
-done
-log "Per-user cache restored"
-
-# Global admin cache (consulted by some macOS builds as the boot-screen fallback).
-/bin/cp "$IMAGE" "/Library/Caches/com.apple.desktop.admin.png" 2>/dev/null || true
-/bin/chmod 644 "/Library/Caches/com.apple.desktop.admin.png" 2>/dev/null || true
-
-# Signal cfprefsd to re-read plists; loginwindow may pick up the change
-# if it listens for preference-change notifications after startup.
-/usr/bin/killall cfprefsd 2>/dev/null || true
-
-log "apply-lockscreen done"
-RESTORE_SCRIPT
-
-    sudo chmod 755 "$restore_script" >/dev/null 2>&1 || return 1
-    sudo chown root:wheel "$restore_script" >/dev/null 2>&1 || return 1
-
-    # Write the LaunchDaemon plist (paths with spaces are safe inside array elements).
-    sudo tee "$daemon_plist" >/dev/null <<DAEMON_PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${daemon_label}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>/Library/Application Support/Atherion/apply-lockscreen.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-DAEMON_PLIST
-
-    sudo chmod 644 "$daemon_plist" >/dev/null 2>&1 || return 1
-    sudo chown root:wheel "$daemon_plist" >/dev/null 2>&1 || return 1
-
-    # Bootstrap (or re-bootstrap) the daemon so it also runs in the current boot session.
-    sudo launchctl bootout "system/${daemon_label}" >/dev/null 2>&1 || true
-    sudo launchctl bootstrap system "$daemon_plist" >/dev/null 2>&1 || return 1
-
+    if [[ -f "$daemon_plist" ]]; then
+        sudo launchctl bootout "system/${daemon_label}" >/dev/null 2>&1 || true
+        sudo rm -f "$daemon_plist" >/dev/null 2>&1 || true
+    fi
+    [[ -f "$restore_script" ]] && sudo rm -f "$restore_script" >/dev/null 2>&1 || true
+    [[ -f "$boot_log" ]] && sudo rm -f "$boot_log" >/dev/null 2>&1 || true
     return 0
 }
+
+# Resolve the path to the macOS default wallpaper that loginwindow loads at
+# cold boot. The filename tracks the marketing name of each release.
+_resolve_system_wallpaper_path() {
+    local v
+    v="$(/usr/bin/sw_vers -productVersion 2>/dev/null | cut -d. -f1)"
+    case "$v" in
+        15) echo "/System/Library/Desktop Pictures/macOS Sequoia.heic" ;;
+        14) echo "/System/Library/Desktop Pictures/macOS Sonoma.heic" ;;
+        13) echo "/System/Library/Desktop Pictures/macOS Ventura.heic" ;;
+        12) echo "/System/Library/Desktop Pictures/Monterey.heic" ;;
+        *)  return 1 ;;
+    esac
+}
+
+# Eligible only when SIP and authenticated-root are BOTH disabled — i.e. an
+# OCLP-patched system. Stock macOS keeps /System sealed and read-only; nothing
+# we do here can touch it.
+_system_wallpaper_replacement_eligible() {
+    local sip auth
+    sip="$(csrutil status 2>/dev/null)"
+    auth="$(csrutil authenticated-root status 2>/dev/null)"
+    echo "$sip"  | grep -qi "disabled" || return 1
+    echo "$auth" | grep -qi "disabled" || return 1
+    return 0
+}
+
+# Replace /System/Library/Desktop Pictures/<release>.heic with our image.
+# This is the only mechanism that actually changes the cold-boot login screen
+# on Sequoia without MDM enrollment. Loginwindow reads this file directly at
+# boot — there is no race with launchd because we change the file, not a pref.
+replace_system_login_wallpaper() {
+    local image_path="$1"
+    local target backup heic_temp
+
+    if ! _system_wallpaper_replacement_eligible; then
+        print_info "System wallpaper replacement skipped (SIP / authenticated-root not both disabled)"
+        return 1
+    fi
+
+    target="$(_resolve_system_wallpaper_path 2>/dev/null)"
+    if [[ -z "$target" ]]; then
+        print_warn "Unsupported macOS version for system wallpaper replacement"
+        return 1
+    fi
+    if [[ ! -f "$target" ]]; then
+        print_warn "macOS system wallpaper not found at: $target"
+        return 1
+    fi
+
+    # The system volume is unsealed on OCLP but may still be mounted read-only.
+    # Try a no-op write first; if it fails, remount / read-write.
+    if ! sudo test -w "$target" 2>/dev/null; then
+        print_info "Remounting / read-write for system wallpaper replacement..."
+        sudo mount -uw / >/dev/null 2>&1 || true
+    fi
+
+    # Convert source to HEIC so the replacement matches the format loginwindow expects.
+    heic_temp="/tmp/atherion-system-wallpaper.heic"
+    if ! sips -s format heic "$image_path" --out "$heic_temp" >/dev/null 2>&1; then
+        print_warn "Could not convert $image_path to HEIC — sips failed"
+        return 1
+    fi
+
+    # One-time backup of the pristine file (do not overwrite an existing backup).
+    backup="${target}.atherion-original"
+    if [[ ! -f "$backup" ]]; then
+        sudo cp "$target" "$backup" >/dev/null 2>&1 || true
+    fi
+
+    if ! sudo cp "$heic_temp" "$target" >/dev/null 2>&1; then
+        print_warn "Could not write $target — system volume is read-only"
+        rm -f "$heic_temp" >/dev/null 2>&1 || true
+        return 1
+    fi
+    sudo chmod 644 "$target" >/dev/null 2>&1 || true
+    rm -f "$heic_temp" >/dev/null 2>&1 || true
+
+    print_ok "Replaced macOS system wallpaper: $target"
+    print_info "Original backed up to: $backup"
+    print_info "Note: re-running OCLP root patches restores the stock system volume — re-run this step after every OCLP patch."
+    return 0
+}
+
 
 list_lockscreen_target_users() {
     dscl . -list /Users UniqueID 2>/dev/null | awk '$2 >= 500 && $1 != "root" && $1 != "nobody" {print $1}'
@@ -253,29 +236,52 @@ verify_lockscreen_for_user() {
 }
 
 configure_lockscreen_background() {
+    # Three distinct macOS "lock-related" screens, what controls each, and what
+    # this function actually does about it:
+    #
+    #   1. Cold-boot login screen (FileVault unlock + first login window)
+    #      Pre-Big-Sur this honored com.apple.loginwindow DesktopPicture; on
+    #      Big Sur and later the boot screen is dynamic and ignores all
+    #      preference files. The ONLY non-MDM mechanism that changes it is
+    #      direct replacement of /System/Library/Desktop Pictures/<release>.heic.
+    #      Stock macOS keeps /System sealed, but OCLP-patched machines have
+    #      authenticated-root disabled and the system volume unsealed — there
+    #      we can write the file directly. Handled by replace_system_login_wallpaper.
+    #
+    #   2. Login window after a previous user has logged in (logout, switch user)
+    #      macOS shows the previously-active user's wallpaper here. Setting each
+    #      local user's wallpaper covers this case. Handled by apply_wallpaper_for_user.
+    #
+    #   3. Per-user lock screen (cmd-ctrl-Q, idle lock)
+    #      Reads from /Library/Caches/Desktop Pictures/<GUID>/lockscreen.png.
+    #      Handled by apply_lockscreen_cache_for_user.
+    #
+    # Anything else (DesktopPicture/LockScreenImage in com.apple.loginwindow,
+    # /private/var/db/loginwindow/..., RunAtLoad daemons that restore those
+    # plists) is dead weight on Sequoia and has been removed.
+
     local image_url="${LOCKSCREEN_IMAGE_URL:-https://wall.tasw.qzz.io/mac.png}"
     local image_file="/tmp/lockscreen_bg.png"
     local persistent_dir="/Library/Application Support/Atherion"
     local persistent_image="$persistent_dir/lockscreen_bg.png"
-    local lock_plist="/Library/Preferences/com.apple.loginwindow"
     local diag_log="/tmp/atherion-lockscreen.log"
     local total_checks=0
     local failed_checks=0
-    local defaults_value=""
-    
+
     : > "$diag_log"
     print_info "Diagnostics log: $diag_log"
+
+    # Tear down the legacy boot daemon if a prior version of this script installed it.
+    remove_legacy_lockscreen_daemon
+
     print_info "Downloading lockscreen image..."
-    
-    # Download the image
     if ! curl -fsSL --connect-timeout 10 --max-time 60 "$image_url" -o "$image_file"; then
         print_warn "Failed to download lockscreen image from $image_url"
         return 1
     fi
     total_checks=$((total_checks + 1))
     print_ok "Check $total_checks: image download"
-    
-    # Verify it's a valid image
+
     if ! file "$image_file" | grep -q "image"; then
         print_warn "Downloaded file is not a valid image"
         rm -f "$image_file"
@@ -284,7 +290,6 @@ configure_lockscreen_background() {
     total_checks=$((total_checks + 1))
     print_ok "Check $total_checks: image validation"
 
-    # Persist the image to a system path so settings survive script exit.
     if ! sudo mkdir -p "$persistent_dir"; then
         print_warn "Failed to create lockscreen directory: $persistent_dir"
         rm -f "$image_file"
@@ -298,119 +303,28 @@ configure_lockscreen_background() {
     sudo chmod 644 "$persistent_image" >/dev/null 2>&1 || true
     total_checks=$((total_checks + 1))
     print_ok "Check $total_checks: persistent image write"
-    
-    # Check if SIP is disabled (OCLP system)
-    local sip_enabled=true
-    if csrutil status 2>/dev/null | grep -q "disabled"; then
-        sip_enabled=false
-        print_info "SIP detected as disabled (OCLP system) - using full lockscreen replacement"
-    fi
-    
-    # For SIP-disabled systems (OCLP), replace actual lockscreen images
-    if [[ "$sip_enabled" == "false" ]]; then
-        _apply_lockscreen_sip_disabled "$persistent_image"
-    fi
-    
-    # Always set loginwindow-related image paths (works with or without SIP)
-    print_info "Applying loginwindow image paths..."
-    
-    # Copy to system location (best-effort cache path; not present on all builds)
-    sudo mkdir -p /Library/Caches/com.apple.loginwindow >/dev/null 2>&1 || true
-    if sudo cp "$persistent_image" /Library/Caches/com.apple.loginwindow/lockscreen_bg.png >/dev/null 2>&1; then
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow cache file write"
+    echo "PersistentImage=$persistent_image" >> "$diag_log" 2>/dev/null || true
+
+    # ── Cold-boot login screen (#1) ────────────────────────────────────────────
+    # Only works on OCLP-style systems where SIP and authenticated-root are both
+    # disabled. Default ON if eligible; opt out via LOCKSCREEN_REPLACE_SYSTEM=0.
+    local replace_system="${LOCKSCREEN_REPLACE_SYSTEM:-1}"
+    if [[ "$replace_system" == "1" ]]; then
+        print_info "Attempting cold-boot wallpaper replacement (system .heic)..."
+        if replace_system_login_wallpaper "$persistent_image"; then
+            total_checks=$((total_checks + 1))
+            print_ok "Check $total_checks: system login wallpaper replaced"
+            echo "SystemWallpaperReplaced=yes" >> "$diag_log" 2>/dev/null || true
+        else
+            print_info "Cold-boot wallpaper unchanged — see message above for reason."
+            echo "SystemWallpaperReplaced=no" >> "$diag_log" 2>/dev/null || true
+        fi
     else
-        print_warn "Could not write optional cache file: /Library/Caches/com.apple.loginwindow/lockscreen_bg.png"
-    fi
-    
-    # Set via defaults (Monterey-Sequoia compatible)
-    if ! sudo defaults write "$lock_plist" "DesktopPicture" "$persistent_image" >/dev/null 2>&1; then
-        print_warn "Failed to set login window background via defaults"
-        failed_checks=$((failed_checks + 1))
-    else
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow DesktopPicture write"
-    fi
-    if ! sudo defaults write "$lock_plist" "LockScreenImage" "$persistent_image" >/dev/null 2>&1; then
-        print_warn "Failed to set LockScreenImage via defaults"
-        failed_checks=$((failed_checks + 1))
-    else
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow LockScreenImage write"
+        print_info "Cold-boot wallpaper replacement disabled (LOCKSCREEN_REPLACE_SYSTEM=0)"
     fi
 
-    # On Sequoia (15+) loginwindow reads its own user-data plist rather than the
-    # system /Library/Preferences path. Write there too using PlistBuddy so the
-    # value bypasses cfprefsd and is on disk immediately.
-    local lw_db_plist="/private/var/db/loginwindow/Library/Preferences/com.apple.loginwindow.plist"
-    if sudo mkdir -p "$(dirname "$lw_db_plist")" >/dev/null 2>&1; then
-        local lw_wrote=0
-        for key in DesktopPicture LockScreenImage; do
-            sudo /usr/libexec/PlistBuddy -c "Set :${key} ${persistent_image}" "$lw_db_plist" >/dev/null 2>&1 \
-                || sudo /usr/libexec/PlistBuddy -c "Add :${key} string ${persistent_image}" "$lw_db_plist" >/dev/null 2>&1 \
-                || true
-            lw_wrote=1
-        done
-        [[ "$lw_wrote" -eq 1 ]] && print_info "loginwindow DB plist updated (Sequoia path)"
-    fi
-
-    # Also write the system-level desktop background preference — loginwindow on
-    # some Sequoia builds reads from com.apple.desktop system plist rather than
-    # the loginwindow-specific domain.
-    local sys_desktop_plist="/Library/Preferences/com.apple.desktop.plist"
-    sudo /usr/libexec/PlistBuddy \
-        -c "Set :Background:default:ImageFilePath ${persistent_image}" "$sys_desktop_plist" >/dev/null 2>&1 \
-    || sudo /usr/libexec/PlistBuddy \
-        -c "Add :Background dict" \
-        -c "Add :Background:default dict" \
-        -c "Add :Background:default:ImageFilePath string ${persistent_image}" \
-        -c "Add :Background:default:Change string Never" \
-        "$sys_desktop_plist" >/dev/null 2>&1 \
-    || true
-    print_info "System desktop plist updated (com.apple.desktop)"
-    
-    # Verify defaults were actually written
-    defaults_value="$(sudo defaults read "$lock_plist" "DesktopPicture" 2>/dev/null || true)"
-    if [[ "$defaults_value" == "$persistent_image" ]]; then
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow DesktopPicture readback"
-        print_info "  Value: $defaults_value"
-        echo "DesktopPicture=$defaults_value" >> "$diag_log" 2>/dev/null || true
-    else
-        print_warn "DesktopPicture readback mismatch: expected='$persistent_image' actual='$defaults_value'"
-        echo "DesktopPicture mismatch expected='$persistent_image' actual='$defaults_value'" >> "$diag_log" 2>/dev/null || true
-        failed_checks=$((failed_checks + 1))
-    fi
-    defaults_value="$(sudo defaults read "$lock_plist" "LockScreenImage" 2>/dev/null || true)"
-    if [[ "$defaults_value" == "$persistent_image" ]]; then
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow LockScreenImage readback"
-        print_info "  Value: $defaults_value"
-        echo "LockScreenImage=$defaults_value" >> "$diag_log" 2>/dev/null || true
-    else
-        print_warn "LockScreenImage readback mismatch: expected='$persistent_image' actual='$defaults_value'"
-        echo "LockScreenImage mismatch expected='$persistent_image' actual='$defaults_value'" >> "$diag_log" 2>/dev/null || true
-        failed_checks=$((failed_checks + 1))
-    fi
-    
-    # Verify image file is accessible and has correct permissions
-    local image_stat
-    local image_user
-    local image_perms
-    image_stat="$(ls -ld "$persistent_image" 2>/dev/null || true)"
-    if [[ -n "$image_stat" ]]; then
-        print_info "Lockscreen image file stat: $image_stat"
-        echo "ImageStat=$image_stat" >> "$diag_log" 2>/dev/null || true
-        # Ensure world-readable so loginwindow can access it
-        sudo chmod 644 "$persistent_image" >/dev/null 2>&1 || true
-    else
-        print_warn "Lockscreen image file not accessible: $persistent_image"
-        echo "ImageStat missing for $persistent_image" >> "$diag_log" 2>/dev/null || true
-        failed_checks=$((failed_checks + 1))
-    fi
-    
-    # Apply lockscreen cache and desktop wallpaper for every local user account.
-    print_info "Applying lockscreen and wallpaper for all users..."
+    # ── Per-user lock screen (#3) and post-login wallpaper (#2) ────────────────
+    print_info "Applying per-user lock screen cache and desktop wallpaper..."
 
     local set_wallpaper="${LOCKSCREEN_SET_WALLPAPER:-1}"
     local applied_any=0
@@ -418,124 +332,52 @@ configure_lockscreen_background() {
         [[ -n "$target_user" ]] || continue
 
         if apply_lockscreen_cache_for_user "$target_user" "$persistent_image"; then
-            print_info "Lockscreen cache updated for user: $target_user"
             if verify_lockscreen_for_user "$target_user"; then
                 total_checks=$((total_checks + 1))
-                print_ok "Check $total_checks: lockscreen cache verify ($target_user)"
+                print_ok "Check $total_checks: lock screen cache ($target_user)"
             else
-                print_warn "Lockscreen cache verify failed for user: $target_user"
+                print_warn "Lock screen cache verify failed for $target_user"
                 failed_checks=$((failed_checks + 1))
             fi
             applied_any=1
         else
-            print_warn "Could not update lockscreen cache for $target_user"
+            print_warn "Could not update lock screen cache for $target_user"
             failed_checks=$((failed_checks + 1))
         fi
 
         if [[ "$set_wallpaper" == "1" ]]; then
             if apply_wallpaper_for_user "$target_user" "$persistent_image"; then
                 total_checks=$((total_checks + 1))
-                print_ok "Check $total_checks: desktop wallpaper apply ($target_user)"
-                echo "Desktop wallpaper apply succeeded for $target_user" >> "$diag_log" 2>/dev/null || true
+                print_ok "Check $total_checks: desktop wallpaper ($target_user)"
+                echo "Wallpaper=$target_user OK" >> "$diag_log" 2>/dev/null || true
             else
                 print_warn "Could not update wallpaper for $target_user"
-                echo "Desktop wallpaper apply failed for $target_user" >> "$diag_log" 2>/dev/null || true
+                echo "Wallpaper=$target_user FAILED" >> "$diag_log" 2>/dev/null || true
                 failed_checks=$((failed_checks + 1))
             fi
         fi
 
-        # Disable screen saver so it does not replace the wallpaper after login.
-        disable_screensaver_for_user "$target_user" && \
-            print_ok "Screen saver disabled for $target_user" || \
-            print_warn "Could not disable screen saver for $target_user"
+        disable_screensaver_for_user "$target_user" >/dev/null 2>&1 \
+            && print_ok "Screen saver disabled for $target_user" \
+            || print_warn "Could not disable screen saver for $target_user"
     done < <(list_lockscreen_target_users)
 
     if [[ "$applied_any" -eq 0 ]]; then
-        print_warn "No eligible local users found for lockscreen cache update."
-        failed_checks=$((failed_checks + 1))
-    fi
-
-    if [[ -f "/Library/Caches/com.apple.loginwindow/lockscreen_bg.png" ]]; then
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: loginwindow cache file exists"
-    else
-        print_warn "Optional cache file missing: /Library/Caches/com.apple.loginwindow/lockscreen_bg.png"
-    fi
-
-    # Invalidate loginwindow cache to force re-read on next lock/reboot.
-    # Keep this non-disruptive: do not kill WindowServer (that drops the GUI session).
-    print_info "Invalidating loginwindow cache to ensure refresh..."
-    
-    # Clear loginwindow mutable state (com.apple.loginwindow-state)
-    sudo defaults delete /Library/Preferences/com.apple.loginwindow-state >/dev/null 2>&1 || true
-    
-    # Flush system defaults cache
-    sudo killall cfprefsd >/dev/null 2>&1 || true
-    sudo killall distnoted >/dev/null 2>&1 || true
-    sleep 1
-    
-    print_ok "Non-disruptive cache invalidation triggered - lockscreen updates on next lock/reboot"
-    echo "Cache invalidation completed without WindowServer restart" >> "$diag_log" 2>/dev/null || true
-
-    if [[ "${LOCKSCREEN_SET_WALLPAPER:-1}" != "1" ]]; then
-        print_info "Desktop wallpaper unchanged (LOCKSCREEN_SET_WALLPAPER=0)."
-        echo "Desktop wallpaper skipped by LOCKSCREEN_SET_WALLPAPER=0" >> "$diag_log" 2>/dev/null || true
-    fi
-
-    # Install a LaunchDaemon that re-applies the image on every boot.
-    # macOS regenerates the loginwindow boot background from session state on logout/shutdown,
-    # overwriting what the script set. The daemon restores our image early in the boot sequence
-    # before loginwindow finishes rendering.
-    print_info "Installing boot-time lockscreen restore daemon..."
-    if install_lockscreen_boot_daemon "$persistent_image"; then
-        total_checks=$((total_checks + 1))
-        print_ok "Check $total_checks: boot-time restore daemon installed (com.atherion.lockscreen)"
-    else
-        print_warn "Could not install boot-time restore daemon; lockscreen may reset after reboot"
+        print_warn "No eligible local users found for lock screen cache update."
         failed_checks=$((failed_checks + 1))
     fi
 
     rm -f "$image_file"
     print_info "Diagnostics persisted at: $diag_log"
     print_info "Verification summary: passed=${total_checks} failed=${failed_checks}"
+
     if [[ "$failed_checks" -gt 0 ]]; then
-        print_warn "Lockscreen/loginwindow update is partial. Review warnings above."
+        print_warn "Lock screen / wallpaper configuration is partial. Review warnings above."
         return 1
     fi
 
-    print_info "Best-effort lock-screen/loginwindow update saved. It applies on next lock screen/reboot without logging out current users."
-    print_ok "Lockscreen/loginwindow update configured"
+    print_ok "Lock screen / wallpaper configured"
     return 0
-}
-
-# Apply lockscreen replacement for SIP-disabled systems (OCLP)
-_apply_lockscreen_sip_disabled() {
-    local image_file="$1"
-    
-    print_info "Replacing lockscreen image (SIP disabled)..."
-    
-    # Copy to standard macOS lockscreen locations (works Monterey-Sequoia)
-    local lock_dirs=(
-        "/Library/Caches/com.apple.loginwindow"
-        "/var/db/loginwindow"
-    )
-    
-    for dir in "${lock_dirs[@]}"; do
-        if [[ -d "$dir" ]]; then
-            sudo cp "$image_file" "$dir/lockscreen.png" 2>/dev/null && \
-            sudo chmod 644 "$dir/lockscreen.png" 2>/dev/null || true
-        fi
-    done
-    
-    # Set system-wide lockscreen via com.apple.loginwindow defaults
-    sudo defaults write /Library/Preferences/com.apple.loginwindow \
-        "DesktopPicture" "$image_file" 2>/dev/null || true
-    
-    # Set for macOS login/lock screen (Monterey+)
-    sudo defaults write /Library/Preferences/com.apple.loginwindow \
-        "LockScreenImage" "$image_file" 2>/dev/null || true
-    
-    print_ok "Lockscreen replacement applied (SIP disabled)"
 }
 
 # MDM profile approach for loginwindow policy (no image payload key)

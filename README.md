@@ -44,5 +44,19 @@ Copy `.env.example` to `.env` (gitignored) before running. Supported variables:
 |---|---|
 | `PACKET_TRACER_DMG_URL` | Direct DMG URL for Cisco Packet Tracer (SharePoint links supported) |
 | `LOCKSCREEN_IMAGE_URL` | Custom wallpaper/lock screen image URL |
+| `LOCKSCREEN_REPLACE_SYSTEM` | `1` (default) replaces `/System/Library/Desktop Pictures/<release>.heic` so the cold-boot login screen actually changes — only runs when SIP and authenticated-root are both disabled (OCLP). Set `0` to skip. |
+| `LOCKSCREEN_SET_WALLPAPER` | `1` (default) sets each local user's desktop wallpaper. Set `0` to skip. |
 | `RELEASES_REPO` | Override GitHub repo used to resolve release assets |
 | `BLENDER_DMG_URL` / `BLENDER_VERSION` | Override Blender download URL and version |
+
+### What gets changed where
+
+macOS has three distinct "lock-related" screens; this script configures each through the only mechanism that actually works for it on Sequoia:
+
+| Screen | Mechanism | Notes |
+|---|---|---|
+| Cold-boot login screen (after restart/shutdown) | Replaces `/System/Library/Desktop Pictures/<release>.heic` directly | OCLP machines only (SIP + authenticated-root both disabled). Reverted by OCLP root-patch re-application — re-run the lockscreen step after each OCLP patch. |
+| Login window after logout / switch-user | Sets each local user's desktop wallpaper (the login window shows the previously-active user's) | Works on Monterey → Sequoia |
+| Per-user lock screen (⌃⌘Q, idle lock) | Writes `/Library/Caches/Desktop Pictures/<GUID>/lockscreen.png` for each user | Works on Monterey → Sequoia |
+
+Pre-Big-Sur tricks (writing `DesktopPicture`/`LockScreenImage` to `com.apple.loginwindow.plist`, `RunAtLoad` daemons that restore those plists, `/private/var/db/loginwindow/...`) are no longer honored on Sequoia and have been removed.
