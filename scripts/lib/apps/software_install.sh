@@ -262,48 +262,13 @@ get_packet_tracer_supported_version() {
 }
 
 resolve_packet_tracer_dmg_url() {
-    local explicit_url="${PACKET_TRACER_DMG_URL:-}"
-    local release_repo="${PACKET_TRACER_RELEASE_REPO:-}"
-    local release_tag="${PACKET_TRACER_RELEASE_TAG:-Cisco}"
-    local api_url
-    local json
-    local dmg_url
-
-    if [[ -n "$explicit_url" ]]; then
-        normalize_download_url "$explicit_url"
-        return 0
-    fi
-
-    if [[ -z "$release_repo" ]]; then
-        release_repo="$(resolve_release_repo)"
-    fi
-
-    if [[ -z "$release_repo" ]]; then
-        return 1
-    fi
-
-    api_url="https://api.github.com/repos/${release_repo}/releases/tags/${release_tag}"
-    json="$(curl -fsSL "$api_url" 2>&1)" || return 1
-
-    if [[ -z "$json" ]]; then
-        return 1
-    fi
-
-    if echo "$json" | grep -q '"message"'; then
-        return 1
-    fi
-
-    local py_lib="${PY_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/py}"
-    
-    if command -v python3 >/dev/null 2>&1; then
-        dmg_url="$(echo "$json" | python3 "$py_lib/github_utils.py" packet-tracer-asset 2>&1)"
-        if [[ -n "$dmg_url" && "$dmg_url" != "Unknown error" ]]; then
-            echo "$dmg_url"
-            return 0
-        fi
-    fi
-
-    return 1
+    # Default SharePoint sharing link — overridable via PACKET_TRACER_DMG_URL.
+    # SharePoint URLs need &download=1 appended (handled by normalize_download_url)
+    # to bypass the preview page and serve the raw DMG.
+    local default_url="https://cloudmails-my.sharepoint.com/:u:/g/personal/ta_cloudmails_apu_edu_my/IQB-fY3VDN7-Sr4Sea-GfxueAQAYszaxiyonSDDpycVbmok?e=y0pNR0"
+    local explicit_url="${PACKET_TRACER_DMG_URL:-$default_url}"
+    normalize_download_url "$explicit_url"
+    return 0
 }
 
 install_packet_tracer() {
@@ -338,9 +303,8 @@ install_packet_tracer() {
 
     if [[ -z "$dmg_url" ]]; then
         echo "Failed: Could not resolve Packet Tracer URL" > "$stage_file" 2>/dev/null || true
-        print_warn "Could not resolve Cisco Packet Tracer DMG URL from GitHub release."
-        print_warn "Repository: ${PACKET_TRACER_RELEASE_REPO:-<auto-detected>}, Tag: ${PACKET_TRACER_RELEASE_TAG:-Cisco}"
-        print_warn "Verify GitHub release exists, check network/firewall, or set PACKET_TRACER_DMG_URL manually."
+        print_warn "Could not resolve Cisco Packet Tracer DMG URL."
+        print_warn "Set PACKET_TRACER_DMG_URL in .env to override the default SharePoint link."
         return 1
     fi
 
@@ -448,6 +412,18 @@ install_packet_tracer() {
 install_android_studio_homebrew() {
     local stage_file="${1:-}"
     install_cask_homebrew_only "android-studio" "/Applications/Android Studio.app" "Android Studio" "$stage_file"
+}
+
+install_microsoft_office_homebrew() {
+    local stage_file="${1:-}"
+    # microsoft-office is the meta-cask that pulls Word, Excel, PowerPoint, Outlook, OneNote.
+    # The cask installs to /Applications/Microsoft <App>.app — we probe Word as a sentinel.
+    install_cask_homebrew_only "microsoft-office" "/Applications/Microsoft Word.app" "Microsoft Office" "$stage_file"
+}
+
+install_microsoft_teams_homebrew() {
+    local stage_file="${1:-}"
+    install_cask_homebrew_only "microsoft-teams" "/Applications/Microsoft Teams.app" "Microsoft Teams" "$stage_file"
 }
 
 install_blender_direct_download() {
@@ -564,6 +540,8 @@ install_required_software() {
     local stage_android="/tmp/install_stage_android.txt"
     local stage_azure="/tmp/install_stage_azure.txt"
     local stage_packet="/tmp/install_stage_packet.txt"
+    local stage_office="/tmp/install_stage_office.txt"
+    local stage_teams="/tmp/install_stage_teams.txt"
 
     print_info "Installing required software set..."
     repair_homebrew_environment || true
@@ -580,8 +558,14 @@ install_required_software() {
     install_packet_tracer "$stage_packet" &
     spinner_wait_with_stages $! "Installing Cisco Packet Tracer" "$stage_packet" || had_error=1
 
+    install_microsoft_office_homebrew "$stage_office" &
+    spinner_wait_with_stages $! "Installing Microsoft Office" "$stage_office" || had_error=1
+
+    install_microsoft_teams_homebrew "$stage_teams" &
+    spinner_wait_with_stages $! "Installing Microsoft Teams" "$stage_teams" || had_error=1
+
     clear_inline_status
-    rm -f "$stage_blender" "$stage_android" "$stage_azure" "$stage_packet" >/dev/null 2>&1 || true
+    rm -f "$stage_blender" "$stage_android" "$stage_azure" "$stage_packet" "$stage_office" "$stage_teams" >/dev/null 2>&1 || true
     verify_required_software_present || had_error=1
 
     if [[ "$had_error" -eq 1 ]]; then

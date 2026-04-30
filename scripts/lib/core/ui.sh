@@ -61,8 +61,24 @@ spinner_wait_with_stages() {
     local i=0
     local current_stage=""
     local last_stage=""
+    local last_printed_stage=""
 
-    if [[ ! -t 1 ]]; then
+    # Skip the spinner entirely if:
+    #   - stdout is not a tty (piped, redirected, tee'd → \r becomes literal in the log)
+    #   - NO_PROGRESS is set (user wants clean output)
+    if [[ ! -t 1 || -n "${NO_PROGRESS:-}" ]]; then
+        # Print stage transitions as plain log lines so the user still sees progress.
+        while kill -0 "$pid" >/dev/null 2>&1; do
+            if [[ -f "$stage_file" ]]; then
+                current_stage="$(tail -n 1 "$stage_file" 2>/dev/null || echo '')"
+                current_stage="$(normalize_stage_label "$current_stage")"
+                if [[ -n "$current_stage" && "$current_stage" != "$last_printed_stage" ]]; then
+                    echo -e "${BLUE}[RUN]${NC} $label - $current_stage"
+                    last_printed_stage="$current_stage"
+                fi
+            fi
+            sleep 1
+        done
         wait "$pid"
         return $?
     fi
@@ -80,7 +96,9 @@ spinner_wait_with_stages() {
         else
             printf "\r\033[2K${BLUE}[RUN]${NC} %s [%c]" "$label" "${frames:i++%${#frames}:1}"
         fi
-        sleep 0.12
+        # 0.5s update cadence — fast enough to feel live, slow enough that the
+        # terminal isn't being repainted ~8x/sec (was 0.12s).
+        sleep 0.5
     done
 
     wait "$pid"

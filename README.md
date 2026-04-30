@@ -46,6 +46,7 @@ Copy `.env.example` to `.env` (gitignored) before running. Supported variables:
 | `LOCKSCREEN_IMAGE_URL` | Custom wallpaper/lock screen image URL |
 | `LOCKSCREEN_REPLACE_SYSTEM` | `1` (default) replaces `/System/Library/Desktop Pictures/<release>.heic` so the cold-boot login screen actually changes — only runs when SIP and authenticated-root are both disabled (OCLP). Set `0` to skip. |
 | `LOCKSCREEN_SET_WALLPAPER` | `1` (default) sets each local user's desktop wallpaper. Set `0` to skip. |
+| `NO_PROGRESS` | Set `1` to suppress the live spinner — stage transitions print as plain log lines instead. Use when teeing output to a log or running unattended. |
 | `RELEASES_REPO` | Override GitHub repo used to resolve release assets |
 | `BLENDER_DMG_URL` / `BLENDER_VERSION` | Override Blender download URL and version |
 

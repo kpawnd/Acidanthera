@@ -65,12 +65,28 @@ configure_power_management() {
         had_error=1
     fi
 
+    # Disable inactivity sleep so the lab machine stays on between scheduled
+    # power-down windows. 0 = never. -a applies to all power sources (battery,
+    # AC, UPS) — the iMacs only have AC anyway, but -a is the right verb.
+    if ! sudo pmset -a displaysleep 0; then
+        print_warn "Failed to disable display sleep."
+        had_error=1
+    fi
+    if ! sudo pmset -a sleep 0; then
+        print_warn "Failed to disable system sleep."
+        had_error=1
+    fi
+    if ! sudo pmset -a disksleep 0; then
+        print_warn "Failed to disable disk sleep."
+        had_error=1
+    fi
+
     if [[ "$had_error" -eq 1 ]]; then
         return 1
     fi
 
     print_ok "Power schedule set for Mon-Sat: on at 07:00, off at 21:30."
-    print_ok "AC wake enabled and Power Nap disabled."
+    print_ok "AC wake enabled, Power Nap disabled, all idle-sleep disabled."
     return 0
 }
 

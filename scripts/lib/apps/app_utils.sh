@@ -816,6 +816,21 @@ verify_required_software_present() {
         had_error=1
     fi
 
+    # Microsoft Office: probe Word as a sentinel for the meta-cask install.
+    if [[ -n "$(resolve_installed_app_path "/Applications/Microsoft Word.app")" ]]; then
+        print_ok "Verified Microsoft Office installation."
+    else
+        print_warn "Microsoft Office (Word) is not installed at expected path: /Applications/Microsoft Word.app"
+        had_error=1
+    fi
+
+    if [[ -n "$(resolve_installed_app_path "/Applications/Microsoft Teams.app")" ]]; then
+        print_ok "Verified Microsoft Teams installation."
+    else
+        print_warn "Microsoft Teams is not installed at expected path: /Applications/Microsoft Teams.app"
+        had_error=1
+    fi
+
     if [[ "$had_error" -eq 1 ]]; then
         return 1
     fi

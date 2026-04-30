@@ -547,12 +547,22 @@ install_homebrew() {
     fi
     chmod 755 "$brew_install_script"
 
+    # Redirect Homebrew installer output to a log file. Otherwise its progress
+    # lines (`==> Downloading…`, `==> Installing…`) interleave with our spinner
+    # and produce visual chaos in the terminal and unreadable lines in tee'd logs.
+    local brew_install_log="/var/log/atherion-brew-install.log"
+    sudo touch "$brew_install_log" >/dev/null 2>&1 || true
+    sudo chmod 644 "$brew_install_log" >/dev/null 2>&1 || true
+    print_info "Homebrew installer output → $brew_install_log"
+
     local brew_ok=0
     if [[ "$EUID" -eq 0 && -n "$target_user" && "$target_user" != "root" ]]; then
-        sudo -u "$target_user" env HOME="$target_home" NONINTERACTIVE=1 /bin/bash "$brew_install_script" \
+        sudo -u "$target_user" env HOME="$target_home" NONINTERACTIVE=1 \
+            /bin/bash "$brew_install_script" >>"$brew_install_log" 2>&1 \
             && brew_ok=1
     else
-        NONINTERACTIVE=1 /bin/bash "$brew_install_script" && brew_ok=1
+        NONINTERACTIVE=1 /bin/bash "$brew_install_script" >>"$brew_install_log" 2>&1 \
+            && brew_ok=1
     fi
     rm -f "$brew_install_script"
 
