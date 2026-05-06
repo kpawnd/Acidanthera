@@ -81,12 +81,31 @@ configure_power_management() {
         had_error=1
     fi
 
+    # Restart automatically after a power failure.
+    if ! sudo pmset -a autorestart 1; then
+        print_warn "Failed to enable autorestart after power failure."
+        had_error=1
+    fi
+
+    # Disable wake for network access (WoL / WoMP).
+    if ! sudo pmset -a womp 0; then
+        print_warn "Failed to disable wake for network access."
+        had_error=1
+    fi
+
+    # Prevent automatic sleep / hibernation when display is off.
+    if ! sudo pmset -a autopoweroff 0; then
+        print_warn "Failed to disable autopoweroff."
+        had_error=1
+    fi
+
     if [[ "$had_error" -eq 1 ]]; then
         return 1
     fi
 
     print_ok "Power schedule set for Mon-Sat: on at 07:00, off at 21:30."
-    print_ok "AC wake enabled, Power Nap disabled, all idle-sleep disabled."
+    print_ok "AC wake enabled; Power Nap, hard disk sleep, WoL, autopoweroff disabled."
+    print_ok "Autorestart after power failure enabled."
     return 0
 }
 
@@ -217,6 +236,26 @@ disable_known_updater_services() {
 
 check_oclp_patch_status() {
     local oclp_app=""
+
+    # SIP status — always report, regardless of OCLP presence.
+    local sip_status
+    sip_status="$(csrutil status 2>/dev/null || true)"
+    if [[ -n "$sip_status" ]]; then
+        print_info "SIP: $sip_status"
+    else
+        print_info "SIP: (csrutil unavailable)"
+    fi
+
+    # NVRAM variables written by OCLP at boot — present only on OCLP-patched machines.
+    local oclp_ver oc_ver
+    oclp_ver="$(nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:OCLP-Version 2>/dev/null || true)"
+    oc_ver="$(nvram 4D1FDA02-38C7-4A6A-9CC6-4BCCA8B30102:opencore-version 2>/dev/null || true)"
+    if [[ -n "$oclp_ver" ]]; then
+        print_info "OCLP nvram: $oclp_ver"
+    else
+        print_info "OCLP nvram: not set (non-OCLP machine or nvram cleared)"
+    fi
+    [[ -n "$oc_ver" ]] && print_info "OpenCore nvram: $oc_ver"
 
     if [[ -d "/Applications/OpenCore-Patcher.app" ]]; then
         oclp_app="/Applications/OpenCore-Patcher.app"

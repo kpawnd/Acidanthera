@@ -1,5 +1,18 @@
 #!/bin/bash
 
+kill_deepfreeze_processes() {
+    # Unregister known PrivilegedHelper labels so launchd does not respawn after pkill.
+    sudo launchctl bootout system/com.faronics.DeepFreezeAgent >/dev/null 2>&1 || true
+    sudo launchctl bootout system/com.faronics.DeepFreezeD >/dev/null 2>&1 || true
+
+    # Force-kill any remaining processes — binary may outlive its plist removal.
+    sudo pkill -9 -f "DeepFreezeAgent" >/dev/null 2>&1 || true
+    sudo pkill -9 -f "faronics"        >/dev/null 2>&1 || true
+    sudo pkill -9 -f "[Dd]eep[Ff]reeze" >/dev/null 2>&1 || true
+
+    sleep 1
+}
+
 remove_deepfreeze_and_faronics() {
     local had_error=0
     local matched=0
@@ -8,6 +21,7 @@ remove_deepfreeze_and_faronics() {
     local py_script="${root_dir}/scripts/py/deepfreeze_targets.py"
 
     print_info "Removing Deep Freeze / Faronics from known service labels and known paths."
+    kill_deepfreeze_processes
 
     if command -v python3 >/dev/null 2>&1 && [[ -f "$py_script" ]]; then
         while IFS= read -r line; do

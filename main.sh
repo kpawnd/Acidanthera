@@ -60,7 +60,7 @@ main() {
     run_step "Create sysmon command" create_sysmon_command
     run_step "Configure bash alias" ensure_bash_alias
     run_step "Configure power management" configure_power_management
-    run_step "Configure lockscreen background" configure_lockscreen_background
+    run_step "Disable screen saver" configure_lockscreen_background
     run_step_interactive "Install required software" install_required_software
 
     print_summary

@@ -534,6 +534,44 @@ install_blender_direct_download() {
     return 0
 }
 
+install_adobe_creative_cloud() {
+    local stage_file="${1:-}"
+    local root_dir="${PROJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+    local pkg_path="${root_dir}/PKG/AdobeCreativeCloud.pkg"
+    local sentinel="/Applications/Adobe Creative Cloud/ACC/Creative Cloud.app"
+
+    echo "Checking Adobe Creative Cloud" > "${stage_file:-/dev/null}" 2>/dev/null || true
+
+    if [[ -d "$sentinel" ]]; then
+        print_ok "Adobe Creative Cloud already installed. Skipping."
+        return 0
+    fi
+
+    if [[ ! -f "$pkg_path" ]]; then
+        print_warn "Adobe Creative Cloud PKG not found at: $pkg_path"
+        print_warn "Place AdobeCreativeCloud.pkg in the PKG/ directory and re-run."
+        return 1
+    fi
+
+    print_info "Installing Adobe Creative Cloud from $pkg_path ..."
+    echo "Running installer" > "${stage_file:-/dev/null}" 2>/dev/null || true
+
+    # -verboseR produces per-resource output useful for log review but noisy on
+    # the terminal — captured to the step log by the run_step subshell.
+    if ! sudo installer -pkg "$pkg_path" -verboseR -target /; then
+        print_warn "Adobe Creative Cloud installer exited with an error."
+        return 1
+    fi
+
+    if [[ -d "$sentinel" ]]; then
+        print_ok "Adobe Creative Cloud installed successfully."
+    else
+        print_warn "Adobe CC installer completed but app not found at expected path."
+        print_warn "It may install to a different location — verify manually."
+    fi
+    return 0
+}
+
 install_required_software() {
     local had_error=0
     local stage_blender="/tmp/install_stage_blender.txt"
@@ -542,6 +580,7 @@ install_required_software() {
     local stage_packet="/tmp/install_stage_packet.txt"
     local stage_office="/tmp/install_stage_office.txt"
     local stage_teams="/tmp/install_stage_teams.txt"
+    local stage_adobe="/tmp/install_stage_adobe.txt"
 
     print_info "Installing required software set..."
     repair_homebrew_environment || true
@@ -564,8 +603,11 @@ install_required_software() {
     install_microsoft_teams_homebrew "$stage_teams" &
     spinner_wait_with_stages $! "Installing Microsoft Teams" "$stage_teams" || had_error=1
 
+    install_adobe_creative_cloud "$stage_adobe" &
+    spinner_wait_with_stages $! "Installing Adobe Creative Cloud" "$stage_adobe" || had_error=1
+
     clear_inline_status
-    rm -f "$stage_blender" "$stage_android" "$stage_azure" "$stage_packet" "$stage_office" "$stage_teams" >/dev/null 2>&1 || true
+    rm -f "$stage_blender" "$stage_android" "$stage_azure" "$stage_packet" "$stage_office" "$stage_teams" "$stage_adobe" >/dev/null 2>&1 || true
     verify_required_software_present || had_error=1
 
     if [[ "$had_error" -eq 1 ]]; then
